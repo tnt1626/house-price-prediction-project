@@ -205,3 +205,87 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ============================================================================
+# ML Project Specific Ignores
+# ============================================================================
+
+# Trained models and artifacts
+artifacts/models/*.joblib
+artifacts/models/*.pkl
+artifacts/models/*.h5
+artifacts/models/*.pt
+artifacts/scalers/*.joblib
+artifacts/scalers/*.pkl
+
+# MLflow tracking and experiments
+mlruns/
+.mlflow/
+*.db
+
+# Training cache and temporary files
+cache/
+*.cache
+*.tmp
+temp/
+
+# Data files (keep structure but ignore large downloads)
+data/*.csv
+data/raw/
+data/processed/
+data/interim/
+!data/.gitkeep
+
+# Pipeline outputs and logs
+logs/
+*.log
+reports/
+outputs/
+
+# Jupyter Notebook outputs
+*.ipynb_checkpoints/
+.ipynb_checkpoints/
+*_files/
+
+# IDE and editor specific
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS specific
+desktop.ini
+.directory
+
+# Test coverage
+.coverage
+htmlcov/
+
+# Experiment tracking
+wandb/
+tensorboard/
+
+# Large media files
+*.mp4
+*.avi
+*.mov
+
+# Checkpoint files from training
+checkpoint/
+*.ckpt
+
+# DVC files (if using data version control)
+.dvc/
+*.dvc.lock
+
+# Optuna study database
+*.db
+optuna/
+
+# File .md
+QUICKSTART.md
+REFACTORING_SUMMARY.md
+SETUP_GUIDE.md
