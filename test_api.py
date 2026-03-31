@@ -32,7 +32,7 @@ def test_health_check() -> bool:
         print_response("GET /health", response)
         return response.status_code == 200
     except Exception as e:
-        print(f"❌ Health check failed: {e}")
+        print(f"[FAIL] Health check failed: {e}")
         return False
 
 
@@ -44,7 +44,7 @@ def test_list_models() -> bool:
         print_response("GET /models", response)
         return response.status_code == 200
     except Exception as e:
-        print(f"❌ List models failed: {e}")
+        print(f"[FAIL] List models failed: {e}")
         return False
 
 
@@ -98,7 +98,7 @@ def test_single_prediction() -> bool:
         print_response("POST /predict", response)
         return response.status_code == 200
     except Exception as e:
-        print(f"❌ Single prediction failed: {e}")
+        print(f"[FAIL] Single prediction failed: {e}")
         return False
 
 
@@ -154,7 +154,7 @@ def test_batch_prediction() -> bool:
         print_response("POST /predict-batch", response)
         return response.status_code == 200
     except Exception as e:
-        print(f"❌ Batch prediction failed: {e}")
+        print(f"[FAIL] Batch prediction failed: {e}")
         return False
 
 
@@ -177,16 +177,16 @@ def run_all_tests() -> None:
             result = test_func()
             results.append((test_name, result))
         except Exception as e:
-            print(f"\n❌ Test '{test_name}' crashed: {e}")
+            print(f"\n[FAIL] Test '{test_name}' crashed: {e}")
             results.append((test_name, False))
     
     # Print summary
     print("\n" + "="*80)
-    print("📊 TEST SUMMARY")
+    print("[RESULT] TEST SUMMARY")
     print("="*80)
     
     for test_name, result in results:
-        status = "✅ PASSED" if result else "❌ FAILED"
+        status = "[PASS] PASSED" if result else "[FAIL] FAILED"
         print(f"{test_name:.<40} {status}")
     
     passed = sum(1 for _, r in results if r)
@@ -197,13 +197,13 @@ def run_all_tests() -> None:
     if passed == total:
         print("\n🎉 All tests passed!")
     else:
-        print(f"\n⚠️  {total - passed} test(s) failed")
+        print(f"\n[WARN] {total - passed} test(s) failed")
 
 
 if __name__ == "__main__":
     import sys
     
-    print("\n⚠️  Make sure the API server is running:")
+    print("\n[WARN] Make sure the API server is running:")
     print("   python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000")
     print("\nStarting tests in 2 seconds...")
     
@@ -213,8 +213,8 @@ if __name__ == "__main__":
     try:
         run_all_tests()
     except KeyboardInterrupt:
-        print("\n\n⚠️  Tests interrupted by user")
+        print("\n\n[WARN] Tests interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"\n\n❌ Tests failed: {e}")
+        print(f"\n\n[FAIL] Tests failed: {e}")
         sys.exit(1)

@@ -40,7 +40,7 @@ def setup_mlflow() -> None:
     """Configure MLflow tracking"""
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
-    logger.info(f"✓ MLflow tracking configured: {MLFLOW_TRACKING_URI}")
+    logger.info(f"[OK] MLflow tracking configured: {MLFLOW_TRACKING_URI}")
 
 
 def run_pipeline(
@@ -125,16 +125,16 @@ def run_pipeline(
                     
                     # Save baseline results
                     baseline_df.to_csv(LOGS_DIR / "baseline_results.csv", index=False)
-                    logger.info(f"✓ Baseline results saved to {LOGS_DIR / 'baseline_results.csv'}")
+                    logger.info(f"[OK] Baseline results saved to {LOGS_DIR / 'baseline_results.csv'}")
             else:
-                logger.info("\n⏭️  SKIPPING Baseline Model Evaluation")
+                logger.info("\n[SKIP] Skipping Baseline Model Evaluation")
                 top5 = ["XGB", "Cat", "LGBM", "RF", "Ridge"]  # Default top models
             
             # ====================================================================
             # STEP 4: HYPERPARAMETER TUNING
             # ====================================================================
             if run_tuning:
-                logger.info("\n🎯 STEP 4: Hyperparameter Tuning")
+                logger.info("\n[TUNE] STEP 4: Hyperparameter Tuning")
                 logger.info("-" * 80)
                 
                 with mlflow.start_run(run_name="Tuning", nested=True):
@@ -146,16 +146,16 @@ def run_pipeline(
                     )
                     
                     if not tuned:
-                        logger.warning("⚠️  No models were tuned successfully")
+                        logger.warning("[WARN] No models were tuned successfully")
                         tuned = {}
             else:
-                logger.info("\n⏭️  SKIPPING Hyperparameter Tuning")
+                logger.info("\n[SKIP] Skipping Hyperparameter Tuning")
                 tuned = {}
             
             # ====================================================================
             # STEP 5: FINAL MODEL SELECTION AND EVALUATION
             # ====================================================================
-            logger.info("\n✨ STEP 5: Final Model Selection")
+            logger.info("\n[FINAL] STEP 5: Final Model Selection")
             logger.info("-" * 80)
             
             with mlflow.start_run(run_name="Final_Model", nested=True):
