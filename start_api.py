@@ -21,12 +21,12 @@ if __name__ == "__main__":
     logger = Logger(__name__)
     
     logger.info("=" * 80)
-    logger.info("🚀 STARTING HOUSE PRICE PREDICTION API")
+    logger.info("[START] STARTING HOUSE PRICE PREDICTION API")
     logger.info("=" * 80)
     
     try:
         logger.info("API Server starting...")
-        logger.info("📚 Documentation will be available at: http://localhost:8000/docs")
+        logger.info("[INFO] Documentation will be available at: http://localhost:8000/docs")
         
         uvicorn.run(
             "src.api.main:app",
@@ -36,8 +36,8 @@ if __name__ == "__main__":
             log_level="info"
         )
     except KeyboardInterrupt:
-        logger.info("\n🛑 Server stopped by user")
+        logger.info("\n[STOP] Server stopped by user")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"❌ Failed to start server: {e}")
+        logger.error(f"[FAIL] Failed to start server: {e}")
         sys.exit(1)

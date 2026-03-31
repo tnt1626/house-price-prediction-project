@@ -242,6 +242,11 @@ logs/
 reports/
 outputs/
 
+# CatBoost and model library outputs
+catboost_info/
+lightgbm_logs/
+xgboost_logs/
+
 # Jupyter Notebook outputs
 *.ipynb_checkpoints/
 .ipynb_checkpoints/
