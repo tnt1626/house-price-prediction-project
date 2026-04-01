@@ -440,15 +440,33 @@ class ModelRegistry:
         self.scalers_dir = SCALERS_DIR
     
     def list_available_models(self) -> list:
-        """List all available trained models."""
+        """List all available trained models (supports .pkl and .joblib formats)."""
         if not self.models_dir.exists():
             return []
-        return [f.stem for f in self.models_dir.glob("*.pkl") 
-                if f.is_file() and f.stem != "preprocessor"]
+        
+        models = []
+        # Tìm cả .pkl và .joblib files
+        for f in self.models_dir.glob("*"):
+            if f.is_file() and f.stem != "preprocessor":
+                if f.suffix in [".pkl", ".joblib"]:
+                    models.append(f.stem)
+        
+        return list(set(models))  # Remove duplicates
     
     def get_model_path(self, model_name: str) -> Path:
-        """Get full path to a model."""
-        return self.models_dir / f"{model_name}.pkl"
+        """Get full path to a model (tries .joblib first, then .pkl)."""
+        # Try .joblib first
+        joblib_path = self.models_dir / f"{model_name}.joblib"
+        if joblib_path.exists():
+            return joblib_path
+        
+        # Fallback to .pkl
+        pkl_path = self.models_dir / f"{model_name}.pkl"
+        if pkl_path.exists():
+            return pkl_path
+        
+        # Default to .joblib if neither exists (for error clarity)
+        return joblib_path
     
     def get_scaler_path(self) -> Path:
         """Get path to preprocessing scaler."""
@@ -456,7 +474,8 @@ class ModelRegistry:
     
     def model_exists(self, model_name: str) -> bool:
         """Check if model exists."""
-        return self.get_model_path(model_name).exists()
+        path = self.get_model_path(model_name)
+        return path.exists()
     
     def scaler_exists(self) -> bool:
         """Check if scaler exists."""
