@@ -19,7 +19,8 @@ from src.core.config import (
     MLFLOW_EXPERIMENT_NAME,
     MODELS_DIR,
     LOGS_DIR,
-    RANDOM_STATE
+    RANDOM_STATE,
+    EXPLAINER_DIR
 )
 from src.core.utils import Logger, MLflowTrainingCacheManager
 from src.ml_pipeline.data_loader import prepare_data
@@ -30,6 +31,7 @@ from src.ml_pipeline.trainer import (
     run_hyperparameter_tuning
 )
 from src.ml_pipeline.evaluation import get_metrics
+from src.ml_pipeline.explainability import ModelExplainer
 
 
 # Setup logging
@@ -237,12 +239,77 @@ def run_pipeline(
                     logger.info(f"[OK] Model saved (joblib): {model_path_joblib}")
                     
                     # Log artifacts to MLflow
-                    mlflow.log_artifact(str(model_path), "models")
-                    mlflow.log_artifact(str(MODELS_DIR / "preprocessor.joblib"), "models")
+                    try:
+                        mlflow.log_artifact(str(model_path), "models")
+                        mlflow.log_artifact(str(MODELS_DIR / "preprocessor.joblib"), "models")
+                        logger.info("[OK] Models logged to MLflow")
+                    except Exception as e:
+                        logger.warning(f"[WARN] Failed to log models to MLflow: {e}")
                     
                 except Exception as e:
                     logger.error(f"[FAIL] Failed to save models: {e}")
-                    return False
+                    import traceback
+                    logger.error(traceback.format_exc())
+                
+                # ====================================================================
+                # CREATE AND SAVE SHAP EXPLAINER (SEPARATE from model save)
+                # ====================================================================
+                logger.info("\n[XAI] STEP 7: Creating SHAP Explainer for interpretability")
+                logger.info("-" * 80)
+                
+                try:
+                    # Extract feature transformer and model from pipeline
+                    feature_transformer = final_pipe.named_steps['features']
+                    model_estimator = final_pipe.named_steps['model']
+                    
+                    logger.info(f"[DEBUG] Feature transformer type: {type(feature_transformer).__name__}")
+                    logger.info(f"[DEBUG] Model type: {type(model_estimator).__name__}")
+                    logger.info(f"[DEBUG] X_train shape: {X_train.shape}")
+                    
+                    # Transform training data
+                    logger.info("[DEBUG] Transforming training data...")
+                    X_train_transformed = feature_transformer.transform(X_train)
+                    logger.info(f"[OK] Data transformed. Shape: {X_train_transformed.shape}")
+                    
+                    # Ensure it's a proper array
+                    if hasattr(X_train_transformed, 'toarray'):  # sparse matrix
+                        X_train_transformed = X_train_transformed.toarray()
+                        logger.info(f"[DEBUG] Converted sparse matrix to dense array")
+                    
+                    # Create and fit explainer
+                    logger.info("[DEBUG] Creating ModelExplainer instance...")
+                    explainer = ModelExplainer(model_estimator, feature_transformer)
+                    
+                    logger.info("[DEBUG] Fitting explainer with training data...")
+                    explainer.fit(X_train_transformed, y_train)
+                    logger.info("[OK] Explainer fitted successfully")
+                    
+                    # Save explainer
+                    logger.info("[DEBUG] Saving explainer to disk...")
+                    explainer_path = explainer.save()
+                    logger.info(f"[OK] SHAP explainer saved: {explainer_path}")
+                    
+                    # Verify it was saved
+                    if explainer_path.exists():
+                        logger.info(f"[VERIFY] Explainer file exists, size: {explainer_path.stat().st_size} bytes")
+                    else:
+                        logger.error(f"[ERROR] Explainer file not found after save: {explainer_path}")
+                    
+                    # Log explainer to MLflow
+                    try:
+                        mlflow.log_artifact(str(explainer_path), "explainers")
+                        logger.info("[OK] Explainer logged to MLflow")
+                    except Exception as e:
+                        logger.warning(f"[WARN] Failed to log explainer to MLflow: {e}")
+                    
+                except ImportError as e:
+                    logger.error(f"[ERROR] SHAP library not available: {e}")
+                    logger.error("Please install SHAP: pip install shap")
+                except Exception as e:
+                    logger.error(f"[ERROR] Failed to create SHAP explainer: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    logger.warning("XAI features will be unavailable in the API")
         
         # ====================================================================
         # COMPLETION
