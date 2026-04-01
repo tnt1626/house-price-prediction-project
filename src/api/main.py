@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.core.config import API_HOST, API_PORT
+from src.core.config import API_HOST, API_PORT, EXPLAINER_DIR
 from src.core.utils import Logger
 from src.api.schemas import (
     HousePriceInput,
@@ -244,6 +244,14 @@ async def load_model(model_name: str) -> dict:
         
         if not prediction_service.is_ready():
             raise Exception("Failed to load model")
+        
+        # Load explainer after model and preprocessor are loaded
+        explainer_path = EXPLAINER_DIR / "shap_explainer.joblib"
+        if explainer_path.exists():
+            if not prediction_service.load_explainer():
+                logger.warning(f"Could not load explainer for model '{model_name}'")
+            else:
+                logger.info(f"Explainer loaded for model '{model_name}'")
         
         logger.info(f"Model '{model_name}' loaded successfully")
         return {
