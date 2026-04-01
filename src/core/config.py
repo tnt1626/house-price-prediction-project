@@ -80,8 +80,7 @@ LASSO_ALPHA = 0.0005
 SCHEMA_TO_DATA_MAPPING = {
     "FirstFlrSF": "1stFlrSF",
     "SecondFlrSF": "2ndFlrSF", 
-    "Bedroom": "BedroomAbvGr",
-    "Kitchen": "KitchenAbvGr",
+    "ThreeSsnPorch": "3SsnPorch",
 }
 
 # Ordinal feature mapping

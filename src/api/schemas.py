@@ -3,91 +3,174 @@ API schemas and data models for request/response validation.
 Uses Pydantic for type validation and serialization.
 """
 
-from typing import Optional, List
+from typing import Optional, List, Union, Any
 from pydantic import BaseModel, Field
 
 
 class HousePriceInput(BaseModel):
-    """Input schema for house price prediction"""
-    
-    LotArea: float = Field(..., description="Lot area in square feet")
-    OverallQual: int = Field(..., description="Overall quality (1-10)")
-    OverallCond: int = Field(..., description="Overall condition (1-10)")
-    YearBuilt: int = Field(..., description="Year built")
-    YearRemodAdd: int = Field(..., description="Year remodeled")
-    TotalBsmtSF: float = Field(default=0, description="Total basement square feet")
-    FirstFlrSF: float = Field(..., description="First floor square feet (1stFlrSF)")
-    SecondFlrSF: float = Field(default=0, description="Second floor square feet (2ndFlrSF)")
-    GrLivArea: float = Field(..., description="Above grade living area")
-    FullBath: int = Field(default=0, description="Full bathrooms")
-    HalfBath: int = Field(default=0, description="Half bathrooms")
-    BsmtFullBath: int = Field(default=0, description="Basement full bathrooms")
-    BsmtHalfBath: int = Field(default=0, description="Basement half bathrooms")
-    Bedroom: int = Field(default=3, description="Bedrooms above grade (BedroomAbvGr)")
-    Kitchen: int = Field(default=1, description="Kitchens above grade (KitchenAbvGr)")
-    TotRmsAbvGrd: int = Field(default=6, description="Total rooms above grade")
-    Fireplaces: int = Field(default=0, description="Number of fireplaces")
-    GarageCars: int = Field(default=1, description="Garage car capacity")
-    GarageSF: float = Field(default=0, description="Garage square feet")
-    
-    # Categorical features
-    MSZoning: str = Field(default="RL", description="Zoning classification")
-    Neighborhood: str = Field(default="NAmes", description="Neighborhood")
-    BldgType: str = Field(default="1Fam", description="Building type")
-    ExterQual: str = Field(default="TA", description="Exterior quality")
-    ExterCond: str = Field(default="TA", description="Exterior condition")
-    BsmtQual: Optional[str] = Field(default="TA", description="Basement quality")
-    BsmtCond: Optional[str] = Field(default="TA", description="Basement condition")
-    HeatingQC: str = Field(default="TA", description="Heating quality")
-    KitchenQual: str = Field(default="TA", description="Kitchen quality")
-    FireplaceQu: Optional[str] = Field(default=None, description="Fireplace quality")
-    GarageQual: Optional[str] = Field(default="TA", description="Garage quality")
-    GarageCond: Optional[str] = Field(default="TA", description="Garage condition")
-    
-    # Sale information
-    MoSold: int = Field(default=6, description="Month sold")
-    YrSold: int = Field(default=2022, description="Year sold")
-    SaleType: str = Field(default="WD", description="Sale type")
-    SaleCondition: str = Field(default="Normal", description="Sale condition")
+    """Schema for single house features."""
+
+    MSSubClass: Optional[int] = Field(None, description="Building class")
+    MSZoning: Optional[str] = Field(None, description="Zoning classification")
+    LotFrontage: Optional[float] = Field(None, description="Linear feet of street connected to property")
+    LotArea: Optional[int] = Field(None, description="Lot size in square feet")
+    Street: Optional[str] = Field(None, description="Type of road access")
+    Alley: Optional[str] = Field(None, description="Type of alley access")
+    LotShape: Optional[str] = Field(None, description="General shape of property")
+    LandContour: Optional[str] = Field(None, description="Flatness of the property")
+    Utilities: Optional[str] = Field(None, description="Type of utilities available")
+    LotConfig: Optional[str] = Field(None, description="Lot configuration")
+    LandSlope: Optional[str] = Field(None, description="Slope of property")
+    Neighborhood: Optional[str] = Field(None, description="Physical locations within Ames city limits")
+    Condition1: Optional[str] = Field(None, description="Proximity to various conditions")
+    Condition2: Optional[str] = Field(None, description="Proximity to various conditions (if more than one)")
+    BldgType: Optional[str] = Field(None, description="Type of dwelling")
+    HouseStyle: Optional[str] = Field(None, description="Style of dwelling")
+    OverallQual: Optional[int] = Field(None, description="Overall material and finish quality")
+    OverallCond: Optional[int] = Field(None, description="Overall condition rating")
+    YearBuilt: Optional[int] = Field(None, description="Original construction date")
+    YearRemodAdd: Optional[int] = Field(None, description="Remodel date")
+    RoofStyle: Optional[str] = Field(None, description="Type of roof")
+    RoofMatl: Optional[str] = Field(None, description="Roof material")
+    Exterior1st: Optional[str] = Field(None, description="Exterior covering on house")
+    Exterior2nd: Optional[str] = Field(None, description="Exterior covering on house (if more than one material)")
+    MasVnrType: Optional[str] = Field(None, description="Masonry veneer type")
+    MasVnrArea: Optional[float] = Field(None, description="Masonry veneer area in square feet")
+    ExterQual: Optional[str] = Field(None, description="Exterior material quality")
+    ExterCond: Optional[str] = Field(None, description="Present condition of the material on the exterior")
+    Foundation: Optional[str] = Field(None, description="Type of foundation")
+    BsmtQual: Optional[str] = Field(None, description="Height of the basement")
+    BsmtCond: Optional[str] = Field(None, description="General condition of the basement")
+    BsmtExposure: Optional[str] = Field(None, description="Refers to walkout or garden level walls")
+    BsmtFinType1: Optional[str] = Field(None, description="Rating of basement finished area")
+    BsmtFinSF1: Optional[float] = Field(None, description="Type 1 finished square feet")
+    BsmtFinType2: Optional[str] = Field(None, description="Rating of basement finished area (if multiple types)")
+    BsmtFinSF2: Optional[float] = Field(None, description="Type 2 finished square feet")
+    BsmtUnfSF: Optional[float] = Field(None, description="Unfinished square feet of basement area")
+    TotalBsmtSF: Optional[float] = Field(None, description="Total square feet of basement area")
+    Heating: Optional[str] = Field(None, description="Type of heating")
+    HeatingQC: Optional[str] = Field(None, description="Heating quality and condition")
+    CentralAir: Optional[str] = Field(None, description="Central air conditioning")
+    Electrical: Optional[str] = Field(None, description="Electrical system")
+    FirstFlrSF: Optional[int] = Field(None, description="First Floor square feet")
+    SecondFlrSF: Optional[int] = Field(None, description="Second floor square feet")
+    LowQualFinSF: Optional[int] = Field(None, description="Low quality finished square feet (all floors)")
+    GrLivArea: Optional[int] = Field(None, description="Above grade (ground) living area square feet")
+    BsmtFullBath: Optional[int] = Field(None, description="Basement full bathrooms")
+    BsmtHalfBath: Optional[int] = Field(None, description="Basement half bathrooms")
+    FullBath: Optional[int] = Field(None, description="Full bathrooms above grade")
+    HalfBath: Optional[int] = Field(None, description="Half baths above grade")
+    BedroomAbvGr: Optional[int] = Field(None, description="Bedrooms above grade (does NOT include basement bedrooms)")
+    KitchenAbvGr: Optional[int] = Field(None, description="Kitchens above grade")
+    KitchenQual: Optional[str] = Field(None, description="Kitchen quality")
+    TotRmsAbvGrd: Optional[int] = Field(None, description="Total rooms above grade (does not include bathrooms)")
+    Functional: Optional[str] = Field(None, description="Home functionality rating")
+    Fireplaces: Optional[int] = Field(None, description="Number of fireplaces")
+    FireplaceQu: Optional[str] = Field(None, description="Fireplace quality")
+    GarageType: Optional[str] = Field(None, description="Garage location")
+    GarageYrBlt: Optional[float] = Field(None, description="Year garage was built")
+    GarageFinish: Optional[str] = Field(None, description="Interior finish of the garage")
+    GarageCars: Optional[int] = Field(None, description="Size of garage in car capacity")
+    GarageArea: Optional[float] = Field(None, description="Size of garage in square feet")
+    GarageQual: Optional[str] = Field(None, description="Garage quality")
+    GarageCond: Optional[str] = Field(None, description="Garage condition")
+    PavedDrive: Optional[str] = Field(None, description="Paved driveway")
+    WoodDeckSF: Optional[int] = Field(None, description="Wood deck area in square feet")
+    OpenPorchSF: Optional[int] = Field(None, description="Open porch area in square feet")
+    EnclosedPorch: Optional[int] = Field(None, description="Enclosed porch area in square feet")
+    ThreeSsnPorch: Optional[int] = Field(None, description="Three season porch area in square feet")
+    ScreenPorch: Optional[int] = Field(None, description="Screen porch area in square feet")
+    PoolArea: Optional[int] = Field(None, description="Pool area in square feet")
+    PoolQC: Optional[str] = Field(None, description="Pool quality")
+    Fence: Optional[str] = Field(None, description="Fence quality")
+    MiscFeature: Optional[str] = Field(None, description="Miscellaneous feature not covered in other categories")
+    MiscVal: Optional[int] = Field(None, description="Value of miscellaneous feature")
+    MoSold: Optional[int] = Field(None, description="Month sold")
+    YrSold: Optional[int] = Field(None, description="Year sold")
+    SaleType: Optional[str] = Field(None, description="Type of sale")
+    SaleCondition: Optional[str] = Field(None, description="Condition of sale")
     
     class Config:
         json_schema_extra = {
             "example": {
+                "MSSubClass": 60,
+                "MSZoning": "RL",
                 "LotArea": 8450,
+                "Street": "Pave",
+                "LotShape": "Reg",
+                "LotFrontage": 50,
+                "LandContour": "Lvl",
+                "Utilities": "AllPub",
+                "LotConfig": "Inside",
+                "LandSlope": "Gtl",
+                "Neighborhood": "CollgCr",
+                "Condition1": "Norm",
+                "Condition2": "Norm",
+                "BldgType": "1Fam",
+                "HouseStyle": "2Story",
                 "OverallQual": 7,
                 "OverallCond": 5,
                 "YearBuilt": 2003,
                 "YearRemodAdd": 2003,
-                "TotalBsmtSF": 1000,
-                "FirstFlrSF": 856,
-                "SecondFlrSF": 854,
-                "GrLivArea": 1710,
-                "FullBath": 2,
-                "HalfBath": 1,
-                "BsmtFullBath": 1,
-                "BsmtHalfBath": 0,
-                "Bedroom": 3,
-                "Kitchen": 1,
-                "TotRmsAbvGrd": 8,
-                "Fireplaces": 1,
-                "GarageCars": 2,
-                "GarageSF": 548,
-                "MSZoning": "RL",
-                "Neighborhood": "NAmes",
-                "BldgType": "1Fam",
+                "RoofStyle": "Gable",
+                "RoofMatl": "CompShg",
+                "Exterior1st": "VinylSd",
+                "Exterior2nd": "VinylSd",
+                "MasVnrType": "BrkFace",
+                "MasVnrArea": 196.0,
                 "ExterQual": "Gd",
                 "ExterCond": "TA",
+                "Foundation": "PConc",
                 "BsmtQual": "Gd",
                 "BsmtCond": "TA",
+                "BsmtExposure": "No",
+                "BsmtFinType1": "GLQ",
+                "BsmtFinSF1": 706.0,
+                "BsmtFinType2": "Unf",
+                "BsmtFinSF2": 0.0,
+                "BsmtUnfSF": 150.0,
+                "TotalBsmtSF": 856.0,
+                "Heating": "GasA",
                 "HeatingQC": "Ex",
+                "CentralAir": "Y",
+                "Electrical": "SBrkr",
+                "FirstFlrSF": 856,
+                "SecondFlrSF": 854,
+                "LowQualFinSF": 0,
+                "GrLivArea": 1710,
+                "BsmtFullBath": 1,
+                "BsmtHalfBath": 0,
+                "FullBath": 2,
+                "HalfBath": 1,
+                "BedroomAbvGr": 3,
+                "KitchenAbvGr": 1,
                 "KitchenQual": "Gd",
-                "FireplaceQu": "Ta",
+                "TotRmsAbvGrd": 8,
+                "Functional": "Typ",
+                "Fireplaces": 0,
+                "FireplaceQu": None,
+                "GarageType": "Attchd",
+                "GarageYrBlt": 2003.0,
+                "GarageFinish": "RFn",
+                "GarageCars": 2,
+                "GarageArea": 548.0,
                 "GarageQual": "TA",
                 "GarageCond": "TA",
-                "MoSold": 7,
-                "YrSold": 2022,
+                "PavedDrive": "Y",
+                "WoodDeckSF": 0,
+                "OpenPorchSF": 61,
+                "EnclosedPorch": 0,
+                "ThreeSsnPorch": 0,
+                "ScreenPorch": 0,
+                "PoolArea": 0,
+                "PoolQC": None,
+                "Fence": None,
+                "MiscFeature": None,
+                "MiscVal": 0,
+                "MoSold": 2,
+                "YrSold": 2008,
                 "SaleType": "WD",
-                "SaleCondition": "Normal"
+                "SaleCondition": "Normal",
             }
         }
 
@@ -189,7 +272,7 @@ class FeatureExplanation(BaseModel):
     """Individual feature explanation from SHAP analysis"""
     
     feature_name: str = Field(..., description="Human-readable feature name")
-    original_value: Optional[float] = Field(default=None, description="Original input value for this feature")
+    original_value: Optional[Union[float, str, int]] = Field(default=None, description="Original input value for this feature (numeric or categorical)")
     shap_value: float = Field(..., description="SHAP value indicating contribution to prediction")
     contribution_type: str = Field(
         ..., 

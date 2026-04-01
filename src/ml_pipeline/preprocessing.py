@@ -53,11 +53,17 @@ class OrdinalMapper(BaseEstimator, TransformerMixin):
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         """Apply ordinal mapping"""
+        if not isinstance(X, pd.DataFrame):
+            return X
+            
         X = X.copy()
         for col, m in self.maps_.items():
             if col in X.columns:
                 X[col] = X[col].map(m)
         return X
+    
+    def get_feature_names_out(self, input_features=None):
+        return np.array(input_features) if input_features is not None else None
 
 
 class MissingnessIndicator(BaseEstimator, TransformerMixin):
@@ -88,10 +94,21 @@ class MissingnessIndicator(BaseEstimator, TransformerMixin):
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         """Add missingness indicator columns"""
+        if not isinstance(X, pd.DataFrame):
+            return X
+            
         X = X.copy()
         for c in self.cols_:
-            X[f"{c}_was_missing"] = X[c].isna().astype(int)
+            # KIỂM TRA: Chỉ xử lý nếu cột tồn tại trong DataFrame hiện tại
+            if c in X.columns:
+                X[f"{c}_was_missing"] = X[c].isna().astype(int)
         return X
+    
+    def get_feature_names_out(self, input_features=None):
+        if input_features is None: return None
+        # Trả về danh sách cột cũ cộng với các cột indicator mới
+        new_cols = [f"{c}_was_missing" for c in self.cols_]
+        return np.concatenate([input_features, new_cols])
 
 
 class RarePooler(BaseEstimator, TransformerMixin):
@@ -138,6 +155,8 @@ class RarePooler(BaseEstimator, TransformerMixin):
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         """Pool rare categories"""
+        if not isinstance(X, pd.DataFrame):
+            return X
         X = X.copy()
         for c, keep in self.keep_levels_.items():
             if c in X.columns:
@@ -145,6 +164,8 @@ class RarePooler(BaseEstimator, TransformerMixin):
                 X[c] = np.where(X[c].isin(keep), X[c], "Other")
         return X
 
+    def get_feature_names_out(self, input_features=None):
+        return np.array(input_features) if input_features is not None else None
 
 class TargetEncoder(BaseEstimator, TransformerMixin):
     """Target-based encoding for categorical variables with smoothing"""
@@ -180,10 +201,15 @@ class TargetEncoder(BaseEstimator, TransformerMixin):
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         """Apply target encoding"""
+        if not isinstance(X, pd.DataFrame):
+            return X
         X_out = X.copy()
         for col, map_dict in self.mapping_.items():
             X_out[f"TE_{col}"] = X_out[col].map(map_dict).fillna(self.global_mean_)
         return X_out
+    
+    def get_feature_names_out(self, input_features=None):
+        return np.array(input_features) if input_features is not None else None
 
 
 class DataSanitizer(BaseEstimator, TransformerMixin):
@@ -207,24 +233,25 @@ class DataSanitizer(BaseEstimator, TransformerMixin):
 
     def transform(self, X):
         """Remove infinite values and empty columns"""
-        if hasattr(X, 'values'):
-            X_out = X.values.copy()
-        else:
+        if isinstance(X, pd.DataFrame):
             X_out = X.copy()
+            X_out = X_out.replace([np.inf, -np.inf], np.nan)
+            return X_out.iloc[:, self.keep_cols_idx_]
 
-        # Replace infinite values with NaN
-        X_out = np.where(np.isinf(X_out), np.nan, X_out)
-
-        # Keep only valid columns
-        X_out = X_out[:, self.keep_cols_idx_]
-
-        return X_out
+        X_out = np.where(np.isinf(X), np.nan, X)
+        return X_out[:, self.keep_cols_idx_]
+    
+    def get_feature_names_out(self, input_features=None):
+        if input_features is None: return None
+        # Trả về danh sách cột đã ~~được giữ lại (lọc theo keep_cols_idx_)
+        return np.array(input_features)[self.keep_cols_idx_]
 
 
 def add_domain_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create domain-specific real estate features.
     Handles both schema names and actual data column names.
+    Gracefully handles missing columns by using sensible defaults.
     
     Parameters:
         df: Input DataFrame
@@ -233,21 +260,40 @@ def add_domain_features(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with additional engineered features
     """
     from src.core.config import SCHEMA_TO_DATA_MAPPING
+
+    if not isinstance(df, pd.DataFrame):
+        return df
+    
+    pd.set_option('future.no_silent_downcasting', True)
     
     df = df.copy()
     
-    # Normalize column names from schema to data names if needed
+    has_numeric_feature_cols = any(col.startswith('f') and col[1:].isdigit() for col in df.columns if len(col) > 1)
+    if has_numeric_feature_cols and len(df.columns) > 100:
+        logger.debug("[DEBUG] Skipping add_domain_features - data already transformed")
+        return df
+    
     rename_map = {}
     for schema_name, data_name in SCHEMA_TO_DATA_MAPPING.items():
         if schema_name in df.columns and data_name not in df.columns:
             rename_map[schema_name] = data_name
     
     if rename_map:
-        logger.info(f"[DEBUG] Renaming columns: {rename_map}")
+        logger.debug(f"[DEBUG] Renaming columns: {rename_map}")
         df = df.rename(columns=rename_map)
+    
+    required_numeric_cols = {
+        'YrSold': 0,
+        'YearBuilt': 0,
+        'YearRemodAdd': 0,
+        'OverallQual': 5,
+        'GrLivArea': 0,
+        'LotArea': 0
+    }
+    for col, default_val in required_numeric_cols.items():
+        if col not in df.columns:
+            df[col] = default_val
 
-    # 1. Total area and bathroom features
-    # Handle both possible column names
     floor_cols = []
     for col_variant in [["TotalBsmtSF", "1stFlrSF", "2ndFlrSF"],
                        ["TotalBsmtSF", "FirstFlrSF", "SecondFlrSF"]]:
@@ -258,42 +304,109 @@ def add_domain_features(df: pd.DataFrame) -> pd.DataFrame:
     if floor_cols:
         df["TotalSF"] = df[floor_cols].fillna(0).sum(axis=1)
     else:
-        logger.warning(f"[WARN] Could not find floor columns. Available: {df.columns.tolist()}")
+        logger.debug(f"[DEBUG] Floor columns not found, creating TotalSF with 0")
         df["TotalSF"] = 0
     
-    df["TotalBath"] = (df["FullBath"].fillna(0) + 0.5*df["HalfBath"].fillna(0) +
-                       df["BsmtFullBath"].fillna(0) + 0.5*df["BsmtHalfBath"].fillna(0))
+    bath_cols = {
+        "full_bath": None,
+        "half_bath": None,
+        "bsmt_full_bath": None,
+        "bsmt_half_bath": None
+    }
 
-    # 2. Age-related features
-    df["HouseAge"] = df["YrSold"] - df["YearBuilt"]
-    df["RemodAge"] = df["YrSold"] - df["YearRemodAdd"]
-    df["IsRemodeled"] = (df["YearRemodAdd"] != df["YearBuilt"]).astype(int)
+    for col in df.columns:
+        col_lower = col.lower().replace(" ", "").replace("_", "")
+        if "fullbath" in col_lower and "bsmt" not in col_lower and bath_cols["full_bath"] is None:
+            bath_cols["full_bath"] = col
+        elif "halfbath" in col_lower and "bsmt" not in col_lower and bath_cols["half_bath"] is None:
+            bath_cols["half_bath"] = col
+        elif "bsmtfullbath" in col_lower and bath_cols["bsmt_full_bath"] is None:
+            bath_cols["bsmt_full_bath"] = col
+        elif "bsmthalfbath" in col_lower and bath_cols["bsmt_half_bath"] is None:
+            bath_cols["bsmt_half_bath"] = col
+    
+    try:
+        total_bath = pd.Series(0.0, index=df.index)
+        for key, col in bath_cols.items():
+            if col and col in df.columns:
+                if "half" in key:
+                    total_bath += 0.5 * df[col].fillna(0)
+                else:
+                    total_bath += df[col].fillna(0)
+        df["TotalBath"] = total_bath
+        if total_bath.sum() == 0:
+            logger.debug("[DEBUG] No bathroom data found, TotalBath set to 0")
+    except Exception as e:
+        logger.warning(f"Could not create TotalBath feature: {e}")
+        df["TotalBath"] = 0
 
-    # 3. Binary and ratio features
-    second_flr_col = "2ndFlrSF" if "2ndFlrSF" in df.columns else "SecondFlrSF"
-    df["Has2ndFlr"] = (df[second_flr_col] > 0).astype(int)
+    if "YrSold" in df.columns and "YearBuilt" in df.columns:
+        df["HouseAge"] = (df["YrSold"] - df["YearBuilt"]).clip(lower=0)
+    else:
+        df["HouseAge"] = 0
+        
+    if "YrSold" in df.columns and "YearRemodAdd" in df.columns:
+        df["RemodAge"] = (df["YrSold"] - df["YearRemodAdd"]).clip(lower=0)
+    else:
+        df["RemodAge"] = 0
+        
+    if "YearRemodAdd" in df.columns and "YearBuilt" in df.columns:
+        df["IsRemodeled"] = (df["YearRemodAdd"] != df["YearBuilt"]).astype(int)
+    else:
+        df["IsRemodeled"] = 0
+
+    second_flr_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if ("secondflr" in col_lower or "2ndflr" in col_lower) and "sf" in col_lower:
+            second_flr_col = col
+            break
+    
+    if second_flr_col and second_flr_col in df.columns:
+        df["Has2ndFlr"] = (df[second_flr_col] > 0).astype(int)
+    else:
+        df["Has2ndFlr"] = 0
     
     porch_cols = [c for c in ["OpenPorchSF", "EnclosedPorch", "3SsnPorch", 
                               "ScreenPorch", "WoodDeckSF"] if c in df.columns]
     if porch_cols:
         df["TotalPorchSF"] = df[porch_cols].fillna(0).sum(axis=1)
+    else:
+        df["TotalPorchSF"] = 0
 
-    # 4. Quality-Area interaction
-    if "OverallQual" in df.columns:
+    if "OverallQual" in df.columns and "GrLivArea" in df.columns:
         df["Quality_Area_Interaction"] = df["OverallQual"] * df["GrLivArea"]
+    else:
+        df["Quality_Area_Interaction"] = 0
 
-    # 5. Cyclic encoding for month sold
     if "MoSold" in df.columns:
-        df["MoSold_sin"] = np.sin(2 * np.pi * df["MoSold"] / 12)
-        df["MoSold_cos"] = np.cos(2 * np.pi * df["MoSold"] / 12)
+        try:
+            # Ensure MoSold is numeric before applying trigonometric functions
+            mo_sold_values = pd.to_numeric(df["MoSold"].fillna(6), errors='coerce')
+            mo_sold_values = np.asarray(mo_sold_values, dtype=np.float64)
+            df["MoSold_sin"] = np.sin(2 * np.pi * (mo_sold_values / 12))
+            df["MoSold_cos"] = np.cos(2 * np.pi * (mo_sold_values / 12))
+        except Exception as e:
+            logger.warning(f"Could not create MoSold trigonometric features: {e}")
+            df["MoSold_sin"] = 0
+            df["MoSold_cos"] = 0
+    else:
+        df["MoSold_sin"] = 0
+        df["MoSold_cos"] = 0
 
-    # 6. Location-type interaction
     if "Neighborhood" in df.columns and "BldgType" in df.columns:
         df["Loc_Type"] = df["Neighborhood"].astype(str) + "_" + df["BldgType"].astype(str)
+    else:
+        df["Loc_Type"] = "Unknown_Unknown"
 
-    # 7. Outlier clipping
     if "LotArea" in df.columns:
-        df["LotArea_clip"] = df["LotArea"].clip(upper=df["LotArea"].quantile(0.99))
+        lot_area_q99 = df["LotArea"].quantile(0.99)
+        if pd.notna(lot_area_q99):
+            df["LotArea_clip"] = df["LotArea"].clip(upper=lot_area_q99)
+        else:
+            df["LotArea_clip"] = df["LotArea"].fillna(0)
+    else:
+        df["LotArea_clip"] = 0
 
     logger.info("[OK] Domain features added")
     return df
@@ -316,13 +429,11 @@ def build_feature_lists(
     """
     from src.core.config import SCHEMA_TO_DATA_MAPPING
     
-    # First, normalize column names from schema to data names if needed
     for schema_name, data_name in SCHEMA_TO_DATA_MAPPING.items():
         for df in (df_train, df_test):
             if schema_name in df.columns and data_name not in df.columns:
                 df.rename(columns={schema_name: data_name}, inplace=True)
     
-    # Ensure MSSubClass is treated as categorical
     for df in (df_train, df_test):
         if "MSSubClass" in df.columns:
             df["MSSubClass"] = df["MSSubClass"].astype(str)
@@ -383,7 +494,6 @@ def make_preprocessor(
     ]
     pre = Pipeline(steps=pre_steps)
 
-    # Handle sklearn version differences
     try:
         ohe = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
     except TypeError:
@@ -445,11 +555,12 @@ def make_feature_space(
     df_test_aug = add_domain_features(df_test.copy())
     cat_cols, ord_cols, num_cont, num_abs = build_feature_lists(df_train_aug, df_test_aug)
 
-    return Pipeline([
+    pipeline = Pipeline([
         ("add_domain", FunctionTransformer(add_domain_features)),
         ("preproc", make_preprocessor(cat_cols, ord_cols, num_cont, num_abs)),
     ])
-
+    
+    return pipeline
 
 def save_scalers(preprocessor: Pipeline, output_dir: Path = SCALERS_DIR) -> bool:
     """

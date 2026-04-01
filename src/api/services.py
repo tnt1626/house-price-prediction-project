@@ -96,6 +96,7 @@ class PredictionService:
         """
         Convert input schema to DataFrame.
         Renames columns from schema names to data column names if needed.
+        Ensures all required columns exist with proper defaults.
         
         Parameters:
             data: Input data
@@ -103,60 +104,175 @@ class PredictionService:
         Returns:
             DataFrame with feature values (using actual data column names)
         """
-        # Convert Pydantic model to dict and then to DataFrame
-        data_dict = data.dict()
-        df = pd.DataFrame([data_dict])
+        # Get all field names from the schema
+        schema_fields = set(HousePriceInput.model_fields.keys())
         
-        # Rename columns from schema names to actual data column names
-        rename_map = {k: v for k, v in SCHEMA_TO_DATA_MAPPING.items() if k in df.columns}
-        if rename_map:
-            logger.debug(f"[DEBUG] Renaming columns: {rename_map}")
-            df = df.rename(columns=rename_map)
+        # Convert to dict, including all fields with exclude_unset=False
+        data_dict = data.model_dump(exclude_unset=False)
+        
+        # Apply column name mapping from schema to data column names
+        mapped_dict = {}
+        for k, v in data_dict.items():
+            # Get the mapped column name from SCHEMA_TO_DATA_MAPPING, or use original if not mapped
+            actual_col_name = SCHEMA_TO_DATA_MAPPING.get(k, k)
+            mapped_dict[actual_col_name] = v
+        
+        # Also add columns using schema names as fallback
+        for field_name in schema_fields:
+            if field_name not in mapped_dict:
+                actual_col_name = SCHEMA_TO_DATA_MAPPING.get(field_name, field_name)
+                if actual_col_name not in mapped_dict:
+                    mapped_dict[actual_col_name] = data_dict.get(field_name, None)
+        
+        # Create DataFrame with a single row
+        df = pd.DataFrame([mapped_dict])
+        
+        # Ensure no duplicate columns, remove fully NaN columns to avoid issues
+        df = df.loc[:, ~df.columns.duplicated()]
+        
+        logger.debug(f"[DEBUG] Input DataFrame shape: {df.shape}, columns: {df.columns.tolist()}")
+        return df
+    
+    def _ensure_preprocessor_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Ensure all columns expected by preprocessor are present in DataFrame.
+        This handles the case where preprocessor was trained on specific columns
+        but prediction input may have missing columns.
+        
+        Parameters:
+            df: Input DataFrame
+            
+        Returns:
+            DataFrame with all required columns
+        """
+        if self.preprocessor is None:
+            return df
+        
+        try:
+            # Try to get feature names from preprocessor
+            original_columns = None
+            
+            # Get all input feature names expected by preprocessor
+            if hasattr(self.preprocessor, 'named_steps'):
+                # Get the add_domain step's output columns if available
+                if 'add_domain' in self.preprocessor.named_steps:
+                    # The add_domain step doesn't change column names drastically
+                    pass
+                
+                # Get the preprocessing step's column names
+                if 'preproc' in self.preprocessor.named_steps:
+                    preproc = self.preprocessor.named_steps['preproc']
+                    if hasattr(preproc, 'named_steps'):
+                        if 'ct' in preproc.named_steps:
+                            ct = preproc.named_steps['ct']
+                            if hasattr(ct, 'transformers_'):
+                                # List all columns that ColumnTransformer expects
+                                all_transformer_cols = []
+                                for name, transformer, cols in ct.transformers_:
+                                    all_transformer_cols.extend(cols)
+                                original_columns = all_transformer_cols
+            
+            if original_columns:
+                # Add missing columns with default values
+                for col in original_columns:
+                    if col not in df.columns:
+                        # Infer type and add appropriate default
+                        df[col] = 0  # Default to 0 for numeric columns
+                        logger.debug(f"[DEBUG] Added missing column '{col}' with default value 0")
+        
+        except Exception as e:
+            logger.warning(f"Could not ensure preprocessor columns: {e}")
         
         return df
     
-    def predict_single(self, data: HousePriceInput) -> Dict[str, Any]:
+    def predict_single(self, input_data: HousePriceInput) -> Dict[str, Any]:
         """
-        Make prediction for a single house.
-        
-        Parameters:
-            data: Input house data
-            
-        Returns:
-            Dictionary with prediction and metadata
+        Thực hiện dự báo cho một căn nhà duy nhất.
         """
         if not self.is_ready():
-            raise RuntimeError("Model not loaded. Please load model first.")
+            raise RuntimeError("Model chưa được tải. Vui lòng kiểm tra lại đường dẫn model.")
         
         try:
-            # Convert input to DataFrame
-            df = self.input_to_dataframe(data)
+            # 1. Chuyển đổi dữ liệu từ Schema (Pydantic) sang DataFrame của Pandas
+            # Hàm này sẽ mapping lại tên cột từ Schema sang tên cột thật trong data (LotArea, LotFrontage, ...)
+            df = self.input_to_dataframe(input_data)
             
-            # Preprocess if available
-            if self.preprocessor:
+            # 2. Đảm bảo tất cả các cột mà preprocessor yêu cầu đều có mặt (tránh lỗi KeyError)
+            df = self._ensure_preprocessor_columns(df)
+            
+            # 3. Xử lý logic Tiền xử lý và Dự báo
+            # Kiểm tra xem self.model có phải là một Pipeline của sklearn không
+            from sklearn.pipeline import Pipeline as SklearnPipeline
+            
+            if isinstance(self.model, SklearnPipeline):
+                # Nếu model là một Pipeline (đã bao gồm bước transform), ta truyền trực tiếp df gốc vào
+                # Điều này tránh lỗi "Double Transformation" dẫn đến mất cột 'LotFrontage'
+                logger.info("Model is a full Pipeline. Predicting directly from raw features.")
+                X_input_for_model = df
+                
+                # QUAN TRỌNG: Đừng transform df lần nữa vì model.predict() sẽ tự làm
+                # Thay vào đó, ta trích xuất X_transformed từ các bước transform của pipeline
+                # Để SHAP có dữ liệu đã xử lý (engineered features)
                 try:
-                    df_processed = self.preprocessor.transform(df)
-                except Exception as e:
-                    logger.warning(f"Preprocessing failed: {e}, using raw features")
-                    df_processed = df
+                    # Lấy bước preprocessor từ pipeline
+                    preprocessor_steps = self.model.named_steps
+                    if 'preprocessor' in preprocessor_steps:
+                        # Transform bằng preprocessor từ pipeline
+                        X_transformed = preprocessor_steps['preprocessor'].transform(df)
+                    else:
+                        # Nếu không tìm thấy, transform bằng self.preprocessor
+                        if self.preprocessor:
+                            X_transformed = self.preprocessor.transform(df)
+                        else:
+                            X_transformed = df
+                except Exception:
+                    # Fallback: dùng self.preprocessor
+                    if self.preprocessor:
+                        X_transformed = self.preprocessor.transform(df)
+                    else:
+                        X_transformed = df
             else:
-                df_processed = df
+                # Nếu model chỉ là thuật toán thuần túy (XGB, CatBoost), ta phải transform thủ công
+                if self.preprocessor is None:
+                    logger.warning("No preprocessor loaded, using raw features")
+                    X_transformed = df
+                else:
+                    X_transformed = self.preprocessor.transform(df)
+                X_input_for_model = X_transformed
+
+            # 4. Chuyển đổi dữ liệu đã xử lý sang DataFrame nếu nó đang là NumPy array
+            # Bước này cực kỳ quan trọng để module XAI/SHAP không bị lỗi '.columns'
+            if not isinstance(X_transformed, pd.DataFrame):
+                try:
+                    # Lấy tên các cột sau khi biến đổi từ preprocessor
+                    cols = self.preprocessor.get_feature_names_out()
+                except Exception:
+                    # Nếu không lấy được tên thật, dùng tên tạm f0, f1... để không bị dừng chương trình
+                    cols = [f"f{i}" for i in range(X_transformed.shape[1])]
+                
+                X_transformed = pd.DataFrame(X_transformed, columns=cols)
             
-            # Make prediction
-            prediction = self.model.predict(df_processed)[0]
+            # 5. Thực hiện dự báo giá
+            # Nếu model là pipeline, nó nhận X_input_for_model (df gốc)
+            # Nếu model là estimator, nó nhận X_input_for_model (X_transformed)
+            prediction = self.model.predict(X_input_for_model)
+            predicted_price = float(prediction[0])
             
-            # Calculate rough confidence (0-1 scale based on prediction uncertainty)
-            # This is a simplified approach; more sophisticated methods could be used
-            confidence = 0.85  # Default confidence
-            
+            # 6. Tạo giải thích SHAP nếu có Explainer
+            if self.explainer:
+                try:
+                    # Truyền X_transformed đã là DataFrame vào đây
+                    self.explainer.get_local_explanation(X_transformed, input_data)
+                except Exception as e:
+                    logger.warning(f"Không thể tạo giải thích XAI: {e}")
+
             return {
-                "predicted_price": float(prediction),
-                "confidence": confidence,
+                "predicted_price": predicted_price,
+                "confidence": 0.85,
                 "model_name": self.model_name
             }
-            
         except Exception as e:
-            logger.error(f"Prediction failed: {e}")
+            logger.error(f"Prediction error: {e}")
             raise
     
     def predict_batch(self, data_list: list) -> list:
@@ -208,7 +324,15 @@ class PredictionService:
                 logger.warning(f"Explainer file not found: {explainer_path}")
                 return False
             
-            self.explainer = ModelExplainer.load(self.model, self.preprocessor, explainer_path)
+            # Get original feature names from schema
+            original_feature_names = list(HousePriceInput.model_fields.keys())
+            
+            self.explainer = ModelExplainer.load(
+                self.model, 
+                self.preprocessor, 
+                explainer_path,
+                original_feature_names=original_feature_names
+            )
             logger.info(f"[OK] Explainer loaded: {explainer_path.name}")
             return True
             
@@ -222,50 +346,82 @@ class PredictionService:
         top_k: int = 10
     ) -> Dict[str, Any]:
         """
-        Make prediction and provide SHAP-based explanations.
-        
-        Parameters:
-            data: Input house data
-            top_k: Number of top contributing features to return
-            
-        Returns:
-            Dictionary with prediction, base_value, and feature explanations
+        Thực hiện dự báo và cung cấp giải thích dựa trên SHAP, xử lý lỗi mảng NumPy.
         """
         if not self.is_ready():
-            raise RuntimeError("Model not loaded. Please load model first.")
+            raise RuntimeError("Model chưa được tải. Vui lòng kiểm tra lại đường dẫn.")
         
         if self.explainer is None:
-            raise RuntimeError("Explainer not loaded. Please load explainer first.")
+            raise RuntimeError("Explainer chưa được tải. Vui lòng kiểm tra lại cấu hình XAI.")
         
         try:
-            # Convert input to DataFrame
+            # 1. Chuyển đổi Schema thành DataFrame (Pydantic V2 dùng model_dump)
             df = self.input_to_dataframe(data)
-            original_input = data.dict()
+            original_input = data.model_dump() 
             
-            # Preprocess if available
-            if self.preprocessor:
+            # 2. Xử lý logic Tiền xử lý dựa trên loại Model (Tránh lỗi Double Transformation)
+            from sklearn.pipeline import Pipeline as SklearnPipeline
+            
+            # Nếu model là một Pipeline hoàn chỉnh (đã có bước preprocessing bên trong)
+            if isinstance(self.model, SklearnPipeline):
+                logger.info("Model is a full Pipeline. Using raw features for prediction.")
+                X_input_for_model = df # Dùng DataFrame gốc cho model
+                
+                # QUAN TRỌNG: Đừng transform df lần nữa vì model.predict() sẽ tự làm
+                # Thay vào đó, ta trích xuất X_processed từ các bước transform của pipeline
+                # Để SHAP có dữ liệu đã xử lý (engineered features)
                 try:
-                    df_processed = self.preprocessor.transform(df)
-                except Exception as e:
-                    logger.warning(f"Preprocessing failed: {e}, using raw features")
-                    df_processed = df
+                    # Lấy bước preprocessor từ pipeline
+                    preprocessor_steps = self.model.named_steps
+                    if 'preprocessor' in preprocessor_steps:
+                        # Transform bằng preprocessor từ pipeline
+                        df_processed = preprocessor_steps['preprocessor'].transform(df)
+                    else:
+                        # Nếu không tìm thấy, transform bằng self.preprocessor
+                        if self.preprocessor:
+                            df_processed = self.preprocessor.transform(df)
+                        else:
+                            df_processed = df
+                except Exception:
+                    # Fallback: dùng self.preprocessor
+                    if self.preprocessor:
+                        df_processed = self.preprocessor.transform(df)
+                    else:
+                        df_processed = df
             else:
-                df_processed = df
+                # Nếu model chỉ là thuật toán (XGB, CatBoost...), ta phải tự transform trước
+                if self.preprocessor:
+                    df_processed = self.preprocessor.transform(df)
+                else:
+                    df_processed = df
+                X_input_for_model = df_processed
+
+            # 3. QUAN TRỌNG: Đảm bảo df_processed LUÔN là DataFrame có tên cột
+            # Điều này để SHAP không bị lỗi 'numpy.ndarray object has no attribute columns'
+            if not isinstance(df_processed, pd.DataFrame):
+                try:
+                    # Lấy tên cột thật từ preprocessor (nếu có)
+                    cols = self.preprocessor.get_feature_names_out()
+                except Exception:
+                    # Nếu không lấy được, dùng tên cột tạm f0, f1...
+                    cols = [f"f{i}" for i in range(df_processed.shape[1])]
+                
+                df_processed = pd.DataFrame(df_processed, columns=cols)
             
-            # Make prediction
-            prediction = self.model.predict(df_processed)[0]
-            confidence = 0.85  # Default confidence
+            # 4. Thực hiện dự báo (Sử dụng đúng biến X_input_for_model)
+            prediction = self.model.predict(X_input_for_model)[0]
             
-            # Get explanations
+            # 5. Lấy dữ liệu giải thích từ Explainer
+            # Lúc này df_processed chắc chắn là DataFrame, không còn lỗi .columns nữa
             explanation_data = self.explainer.get_local_explanation(
-                X_single=pd.DataFrame(df_processed) if not isinstance(df_processed, pd.DataFrame) else df_processed,
+                X_single=df_processed,
                 original_input=original_input,
                 top_k=top_k
             )
             
             return {
                 "predicted_price": float(prediction),
-                "confidence": confidence,
+                "confidence": 0.85,
                 "model_name": self.model_name,
                 "base_value": explanation_data["base_value"],
                 "explanations": explanation_data["explanations"]

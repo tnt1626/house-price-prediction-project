@@ -10,6 +10,7 @@ from pathlib import Path
 import joblib
 import logging
 import re
+from sklearn.pipeline import Pipeline
 
 try:
     import shap
@@ -30,7 +31,7 @@ class ModelExplainer:
     Supports tree-based models (CatBoost, XGBoost, LightGBM, Random Forest).
     """
     
-    def __init__(self, model: Any, preprocessor: Any, background_size: int = 100):
+    def __init__(self, model: Any, preprocessor: Any, background_size: int = 100, original_feature_names: List[str] = None):
         """
         Initialize ModelExplainer.
         
@@ -38,6 +39,7 @@ class ModelExplainer:
             model: Trained tree-based model (CatBoost, XGBoost, etc.)
             preprocessor: Fitted ColumnTransformer or preprocessing pipeline
             background_size: Number of samples for SHAP background data
+            original_feature_names: List of original feature names from schema
         """
         if not HAS_SHAP:
             raise ImportError("SHAP is required for explainability. Install with: pip install shap")
@@ -47,7 +49,7 @@ class ModelExplainer:
         self.background_size = background_size
         self.explainer = None
         self.X_background = None
-        self.feature_names_original = None
+        self.feature_names_original = original_feature_names or []
         self.feature_names_transformed = None
         
         logger.info("[OK] ModelExplainer initialized")
@@ -95,40 +97,58 @@ class ModelExplainer:
             return {name: name for name in X.columns}
     
     def _get_feature_names_transformed(self) -> List[str]:
-        """Get feature names after preprocessing transformation."""
+        """
+        Trích xuất tên đặc trưng sau khi biến đổi một cách mạnh mẽ.
+        Hỗ trợ Pipeline lồng nhau và ColumnTransformer.
+        """
         try:
-            logger.info(f"[DEBUG] Attempting to extract feature names from preprocessor type: {type(self.preprocessor).__name__}")
+            logger.info(f"[DEBUG] Attempting to extract feature names from: {type(self.preprocessor).__name__}")
             
+            # 1. Thử gọi trực tiếp (Cách chuẩn của Scikit-Learn hiện đại)
             if hasattr(self.preprocessor, 'get_feature_names_out'):
                 try:
                     names = self.preprocessor.get_feature_names_out().tolist()
-                    logger.info(f"[DEBUG] Got feature names from get_feature_names_out(): {len(names)} features")
-                    return names
+                    if names and len(names) > 0:
+                        logger.info(f"[OK] Got {len(names)} names from get_feature_names_out()")
+                        return names
                 except Exception as e:
-                    logger.warning(f"[WARN] get_feature_names_out() failed: {e}")
+                    logger.debug(f"Direct get_feature_names_out failed: {e}")
+
+            # 2. Xử lý Pipeline lồng nhau (drill down)
+            # Theo cấu trúc của bạn: Pipeline -> Step('preproc') -> Pipeline -> Step('ct')
+            current_step = self.preprocessor
             
-            if hasattr(self.preprocessor, 'feature_names_'):
-                logger.info(f"[DEBUG] Using feature_names_ attribute")
-                return self.preprocessor.feature_names_
-            
-            if hasattr(self.preprocessor, 'transformers_'):
-                logger.info(f"[DEBUG] Extracting features from ColumnTransformer")
+            # Đi sâu vào bước 'preproc' nếu có
+            if hasattr(current_step, 'named_steps') and 'preproc' in current_step.named_steps:
+                current_step = current_step.named_steps['preproc']
+                
+            # Đi sâu vào bước 'ct' (ColumnTransformer) nếu có
+            if hasattr(current_step, 'named_steps') and 'ct' in current_step.named_steps:
+                current_step = current_step.named_steps['ct']
+
+            # 3. Trích xuất thủ công từ ColumnTransformer nếu các bước trên thất bại
+            if hasattr(current_step, 'transformers_'):
+                logger.info("[DEBUG] Extracting features manually from ColumnTransformer")
                 names = []
-                for trans_name, transformer, columns in self.preprocessor.transformers_:
-                    logger.debug(f"  - {trans_name}: {columns}")
+                for trans_name, transformer, columns in current_step.transformers_:
+                    if trans_name == 'remainder' and transformer == 'drop':
+                        continue
+                    
                     if hasattr(transformer, 'get_feature_names_out'):
                         try:
+                            # Lấy tên cột đã biến đổi (ví dụ: OneHot thành Neighborhood_StoneBr)
                             out_names = transformer.get_feature_names_out(columns)
                             names.extend(out_names)
-                        except Exception as e:
-                            logger.debug(f"    Failed to get names from {trans_name}: {e}")
-                            names.extend([f"{trans_name}_{col}" for col in columns])
+                        except Exception:
+                            names.extend([f"{trans_name}__{col}" for col in columns])
                     else:
+                        # Nếu là các bước passthrough hoặc mapper đơn giản
                         names.extend(columns)
-                logger.info(f"[DEBUG] Extracted {len(names)} feature names from ColumnTransformer")
-                return names
-            
-            logger.warning("[WARN] Could not determine feature names from preprocessor")
+                
+                if names:
+                    return names
+
+            logger.warning("[WARN] Could not determine feature names, returning empty list")
             return []
             
         except Exception as e:
@@ -148,7 +168,8 @@ class ModelExplainer:
             'TargetEncoder_', 'OneHotEncoder_', 'OrdinalEncoder_',
             'StandardScaler_', 'MinMaxScaler_', 'RobustScaler_',
             'QuantileTransformer_', 'PowerTransformer_',
-            'remainder__', 'passthrough_'
+            'remainder__', 'passthrough_', 'cat__', 'num_cont__', 
+            'num_abs__', 'ord__',
         ]
         
         cleaned = feature_name
@@ -156,7 +177,7 @@ class ModelExplainer:
             if cleaned.startswith(prefix):
                 cleaned = cleaned.replace(prefix, '', 1)
                 break
-        
+
         return cleaned
     
     def fit(self, X_train: pd.DataFrame, y_train: Optional[np.ndarray] = None) -> None:
@@ -231,7 +252,7 @@ class ModelExplainer:
         Get local SHAP explanation for a single sample.
         
         Parameters:
-            X_single: Single preprocessed sample (shape: 1, n_features)
+            X_single: Single preprocessed sample (shape: 1, n_features) - DataFrame or numpy array
             original_input: Original input dict for feature name mapping
             top_k: Number of top features to return
             
@@ -242,11 +263,21 @@ class ModelExplainer:
             raise RuntimeError("Explainer not fitted. Call fit() first.")
         
         try:
-            # Ensure correct shape
+            # IMPORTANT: Keep track of original format and ensure DataFrame is available for column access
+            X_df_original = None
             if isinstance(X_single, pd.DataFrame):
+                X_df_original = X_single
                 X_np = X_single.values
             else:
                 X_np = X_single
+                # Try to create DataFrame from numpy array if we have feature names
+                if self.feature_names_transformed and len(self.feature_names_transformed) > 0:
+                    try:
+                        if isinstance(X_np, np.ndarray) and X_np.ndim == 1:
+                            X_np = X_np.reshape(1, -1)
+                        X_df_original = pd.DataFrame(X_np, columns=self.feature_names_transformed)
+                    except Exception as e:
+                        logger.warning(f"Could not create DataFrame from numpy array: {e}")
             
             if X_np.ndim == 1:
                 X_np = X_np.reshape(1, -1)
@@ -266,7 +297,23 @@ class ModelExplainer:
                 base_value = float(base_value[0])
             
             # Get model prediction
-            prediction = float(self.model.predict(X_np)[0])
+            try:
+                # If model is a Pipeline with preprocessing, extract just the final estimator
+                # because X_np is already transformed data from SHAP
+                prediction_model = self.model
+                if isinstance(self.model, Pipeline):
+                    prediction_model = self.model.named_steps.get('model') or self.model.named_steps[list(self.model.named_steps.keys())[-1]]
+                
+                # Use numpy array (already transformed) for the final model
+                prediction = float(prediction_model.predict(X_np)[0])
+            except Exception as e:
+                logger.warning(f"Predict failed: {e}")
+                # Fallback: try with the original model in case it handles both
+                try:
+                    prediction = float(self.model.predict(X_np)[0])
+                except Exception as e2:
+                    logger.error(f"Final prediction failed: {e2}")
+                    raise
             
             # Prepare feature explanations
             explanations = []
@@ -275,19 +322,38 @@ class ModelExplainer:
                 # Clean feature name
                 clean_name = self._clean_feature_name(feature_name)
                 
+                # Try to map to original feature name if available
+                display_name = clean_name
+                if idx < len(self.feature_names_original) and self.feature_names_original[idx]:
+                    display_name = self.feature_names_original[idx]
+                
                 # Get original value if available
-                if original_input and clean_name in original_input:
-                    original_value = original_input[clean_name]
-                elif isinstance(X_single, pd.DataFrame) and feature_name in X_single.columns:
-                    original_value = float(X_single[feature_name].values[0])
-                else:
-                    original_value = None
+                original_value = None
+                
+                # Try to get from original_input dict first (try both display name and clean name)
+                if original_input:
+                    if display_name in original_input:
+                        original_value = original_input[display_name]
+                    elif clean_name in original_input:
+                        original_value = original_input[clean_name]
+                    elif feature_name in original_input:
+                        original_value = original_input[feature_name]
+                
+                # If not found, try to get from DataFrame
+                if original_value is None and X_df_original is not None:
+                    try:
+                        if feature_name in X_df_original.columns:
+                            original_value = float(X_df_original[feature_name].values[0])
+                        elif clean_name in X_df_original.columns:
+                            original_value = float(X_df_original[clean_name].values[0])
+                    except Exception as e:
+                        logger.debug(f"Could not extract original value for {feature_name}: {e}")
                 
                 # Determine contribution type
                 contribution_type = "positive" if shap_val > 0 else "negative"
                 
                 explanations.append({
-                    "feature_name": clean_name,
+                    "feature_name": display_name,
                     "original_value": original_value,
                     "shap_value": float(shap_val),
                     "contribution_type": contribution_type,
@@ -310,6 +376,8 @@ class ModelExplainer:
             
         except Exception as e:
             logger.error(f"Failed to get local explanation: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise
     
     def save(self, path: Optional[Path] = None) -> Path:
@@ -340,12 +408,14 @@ class ModelExplainer:
                 'explainer': self.explainer,
                 'X_background': self.X_background,
                 'feature_names_transformed': self.feature_names_transformed,
+                'feature_names_original': self.feature_names_original,
                 'background_size': self.background_size
             }
             
             logger.info(f"[DEBUG] Explainer data keys: {explainer_data.keys()}")
             logger.info(f"[DEBUG] X_background shape: {self.X_background.shape if self.X_background is not None else None}")
             logger.info(f"[DEBUG] Feature names count: {len(self.feature_names_transformed) if self.feature_names_transformed else 0}")
+            logger.info(f"[DEBUG] Original feature names count: {len(self.feature_names_original) if self.feature_names_original else 0}")
             
             # Save with joblib
             joblib.dump(explainer_data, path, compress=3)
@@ -365,7 +435,7 @@ class ModelExplainer:
             raise
     
     @classmethod
-    def load(cls, model: Any, preprocessing: Any, path: Optional[Path] = None) -> 'ModelExplainer':
+    def load(cls, model: Any, preprocessing: Any, path: Optional[Path] = None, original_feature_names: List[str] = None) -> 'ModelExplainer':
         """
         Load explainer from disk.
         
@@ -373,6 +443,7 @@ class ModelExplainer:
             model: Trained model (required for initialization)
             preprocessing: Fitted preprocessor (required for initialization)
             path: Path to explainer file (default: EXPLAINER_DIR/shap_explainer.joblib)
+            original_feature_names: List of original feature names from schema (optional override)
             
         Returns:
             Loaded ModelExplainer instance
@@ -392,8 +463,11 @@ class ModelExplainer:
             
             logger.info(f"[DEBUG] Loaded explainer data keys: {explainer_data.keys()}")
             
+            # Use provided original_feature_names if available, otherwise use saved ones
+            names_to_use = original_feature_names or explainer_data.get('feature_names_original')
+            
             # Create instance
-            instance = cls(model, preprocessing)
+            instance = cls(model, preprocessing, original_feature_names=names_to_use)
             instance.explainer = explainer_data['explainer']
             instance.X_background = explainer_data['X_background']
             instance.feature_names_transformed = explainer_data['feature_names_transformed']
@@ -401,6 +475,7 @@ class ModelExplainer:
             logger.info(f"[OK] Explainer loaded successfully from {path}")
             logger.info(f"[DEBUG] X_background shape: {instance.X_background.shape}")
             logger.info(f"[DEBUG] Feature names count: {len(instance.feature_names_transformed) if instance.feature_names_transformed else 0}")
+            logger.info(f"[DEBUG] Original feature names count: {len(instance.feature_names_original) if instance.feature_names_original else 0}")
             
             return instance
             
