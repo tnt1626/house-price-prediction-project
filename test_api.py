@@ -30,10 +30,11 @@ def test_health_check() -> bool:
     try:
         response = requests.get(f"{API_BASE_URL}/health")
         print_response("GET /health", response)
-        return response.status_code == 200
+        assert response.status_code == 200, "Health check failed"
+        return True
     except Exception as e:
         print(f"[FAIL] Health check failed: {e}")
-        return False
+        assert False, "Health check failed"
 
 
 def test_list_models() -> bool:
@@ -42,10 +43,11 @@ def test_list_models() -> bool:
     try:
         response = requests.get(f"{API_BASE_URL}/models")
         print_response("GET /models", response)
-        return response.status_code == 200
+        assert response.status_code == 200, "List models failed"
+        return True
     except Exception as e:
         print(f"[FAIL] List models failed: {e}")
-        return False
+        assert False, "List models failed"
 
 
 def test_single_prediction() -> bool:
@@ -96,10 +98,11 @@ def test_single_prediction() -> bool:
             json=house_data
         )
         print_response("POST /predict", response)
-        return response.status_code == 200
+        assert response.status_code == 200, "Single prediction failed"
+        return True
     except Exception as e:
         print(f"[FAIL] Single prediction failed: {e}")
-        return False
+        assert False, "Single prediction failed"
 
 
 def test_batch_prediction() -> bool:
@@ -152,10 +155,11 @@ def test_batch_prediction() -> bool:
             json=batch_data
         )
         print_response("POST /predict-batch", response)
-        return response.status_code == 200
+        assert response.status_code == 200, "Batch prediction failed"
+        return True
     except Exception as e:
         print(f"[FAIL] Batch prediction failed: {e}")
-        return False
+        assert False, "Batch prediction failed"
 
 
 def run_all_tests() -> None:

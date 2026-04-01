@@ -1,6 +1,6 @@
 """
 Service layer for business logic.
-Handles model loading, preprocessing, and predictions.
+Handles model loading, preprocessing, and predictions, including SHAP-based explanations.
 """
 
 from typing import Optional, Dict, Any
@@ -10,8 +10,9 @@ from pathlib import Path
 import joblib
 import logging
 
-from src.core.config import MODELS_DIR, SCALERS_DIR
+from src.core.config import MODELS_DIR, SCALERS_DIR, EXPLAINER_DIR, SCHEMA_TO_DATA_MAPPING
 from src.api.schemas import HousePriceInput, PredictionResponse
+from src.ml_pipeline.explainability import ModelExplainer
 
  
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ class PredictionService:
         """
         self.model = None
         self.preprocessor = None
+        self.explainer = None
         self.model_name = "None"
         
         if model_path:
@@ -93,16 +95,24 @@ class PredictionService:
     def input_to_dataframe(self, data: HousePriceInput) -> pd.DataFrame:
         """
         Convert input schema to DataFrame.
+        Renames columns from schema names to data column names if needed.
         
         Parameters:
             data: Input data
             
         Returns:
-            DataFrame with feature values
+            DataFrame with feature values (using actual data column names)
         """
         # Convert Pydantic model to dict and then to DataFrame
         data_dict = data.dict()
         df = pd.DataFrame([data_dict])
+        
+        # Rename columns from schema names to actual data column names
+        rename_map = {k: v for k, v in SCHEMA_TO_DATA_MAPPING.items() if k in df.columns}
+        if rename_map:
+            logger.debug(f"[DEBUG] Renaming columns: {rename_map}")
+            df = df.rename(columns=rename_map)
+        
         return df
     
     def predict_single(self, data: HousePriceInput) -> Dict[str, Any]:
@@ -174,6 +184,96 @@ class PredictionService:
                 })
         
         return predictions
+    
+    def load_explainer(self, explainer_path: Optional[Path] = None) -> bool:
+        """
+        Load SHAP explainer from disk.
+        
+        Parameters:
+            explainer_path: Path to explainer file (default: EXPLAINER_DIR/shap_explainer.joblib)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if self.model is None or self.preprocessor is None:
+            logger.error("Model and preprocessor must be loaded before explainer")
+            return False
+        
+        if explainer_path is None:
+            explainer_path = EXPLAINER_DIR / "shap_explainer.joblib"
+        
+        try:
+            explainer_path = Path(explainer_path)
+            if not explainer_path.exists():
+                logger.warning(f"Explainer file not found: {explainer_path}")
+                return False
+            
+            self.explainer = ModelExplainer.load(self.model, self.preprocessor, explainer_path)
+            logger.info(f"[OK] Explainer loaded: {explainer_path.name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load explainer: {e}")
+            return False
+    
+    def predict_and_explain(
+        self,
+        data: HousePriceInput,
+        top_k: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Make prediction and provide SHAP-based explanations.
+        
+        Parameters:
+            data: Input house data
+            top_k: Number of top contributing features to return
+            
+        Returns:
+            Dictionary with prediction, base_value, and feature explanations
+        """
+        if not self.is_ready():
+            raise RuntimeError("Model not loaded. Please load model first.")
+        
+        if self.explainer is None:
+            raise RuntimeError("Explainer not loaded. Please load explainer first.")
+        
+        try:
+            # Convert input to DataFrame
+            df = self.input_to_dataframe(data)
+            original_input = data.dict()
+            
+            # Preprocess if available
+            if self.preprocessor:
+                try:
+                    df_processed = self.preprocessor.transform(df)
+                except Exception as e:
+                    logger.warning(f"Preprocessing failed: {e}, using raw features")
+                    df_processed = df
+            else:
+                df_processed = df
+            
+            # Make prediction
+            prediction = self.model.predict(df_processed)[0]
+            confidence = 0.85  # Default confidence
+            
+            # Get explanations
+            explanation_data = self.explainer.get_local_explanation(
+                X_single=pd.DataFrame(df_processed) if not isinstance(df_processed, pd.DataFrame) else df_processed,
+                original_input=original_input,
+                top_k=top_k
+            )
+            
+            return {
+                "predicted_price": float(prediction),
+                "confidence": confidence,
+                "model_name": self.model_name,
+                "base_value": explanation_data["base_value"],
+                "explanations": explanation_data["explanations"]
+            }
+            
+        except Exception as e:
+            logger.error(f"Prediction with explanation failed: {e}")
+            raise
 
 
 class ModelRegistry:
@@ -209,7 +309,7 @@ class ModelRegistry:
 
 def create_default_service() -> PredictionService:
     """
-    Create a prediction service with default models.
+    Create a prediction service with default models and explainer.
     
     Returns:
         Configured PredictionService
@@ -228,4 +328,10 @@ def create_default_service() -> PredictionService:
     scaler_path = registry.get_scaler_path() if registry.scaler_exists() else None
     
     service = PredictionService(model_path=model_path, scaler_path=scaler_path)
+    
+    # Try to load explainer (non-blocking; continue even if it fails)
+    if (EXPLAINER_DIR / "shap_explainer.joblib").exists():
+        if not service.load_explainer():
+            logger.warning("Could not load SHAP explainer, XAI features will be unavailable")
+    
     return service

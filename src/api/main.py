@@ -19,7 +19,8 @@ from src.api.schemas import (
     BatchPredictionInput,
     BatchPredictionResponse,
     HealthResponse,
-    ErrorResponse
+    ErrorResponse,
+    PredictionWithExplainResponse
 )
 from src.api.services import PredictionService, create_default_service, ModelRegistry
 
@@ -162,6 +163,46 @@ async def predict_batch(input_data: BatchPredictionInput) -> BatchPredictionResp
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Batch prediction failed: {str(e)}"
+        )
+
+
+@app.post("/predict-explain", response_model=PredictionWithExplainResponse, tags=["Predictions"])
+async def predict_with_explanation(data: HousePriceInput, top_features: int = 10) -> PredictionWithExplainResponse:
+    """
+    Predict house price with SHAP-based explainability.
+    
+    Returns predicted price along with impact analysis of top contributing features.
+    Features are ranked by their SHAP values indicating positive or negative contribution to the price.
+    
+    **Parameters:**
+    - **data**: House features input
+    - **top_features**: Number of top contributing features to return (default: 10)
+    
+    **Response includes:**
+    - **predicted_price**: ML model prediction
+    - **base_value**: SHAP base value (expected/mean prediction)
+    - **explanations**: List of features with SHAP values indicating individual contributions
+    """
+    if not prediction_service or not prediction_service.is_ready():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Prediction service is not ready. Model not loaded."
+        )
+    
+    if prediction_service.explainer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SHAP explainer not loaded. XAI features are unavailable. Please retrain the model with explainer generation."
+        )
+    
+    try:
+        result = prediction_service.predict_and_explain(data, top_k=top_features)
+        return PredictionWithExplainResponse(**result)
+    except Exception as e:
+        logger.error(f"Prediction with explanation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Prediction with explanation failed: {str(e)}"
         )
 
 

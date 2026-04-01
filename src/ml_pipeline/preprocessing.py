@@ -224,6 +224,7 @@ class DataSanitizer(BaseEstimator, TransformerMixin):
 def add_domain_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create domain-specific real estate features.
+    Handles both schema names and actual data column names.
     
     Parameters:
         df: Input DataFrame
@@ -231,10 +232,35 @@ def add_domain_features(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with additional engineered features
     """
+    from src.core.config import SCHEMA_TO_DATA_MAPPING
+    
     df = df.copy()
+    
+    # Normalize column names from schema to data names if needed
+    rename_map = {}
+    for schema_name, data_name in SCHEMA_TO_DATA_MAPPING.items():
+        if schema_name in df.columns and data_name not in df.columns:
+            rename_map[schema_name] = data_name
+    
+    if rename_map:
+        logger.info(f"[DEBUG] Renaming columns: {rename_map}")
+        df = df.rename(columns=rename_map)
 
     # 1. Total area and bathroom features
-    df["TotalSF"] = df[["TotalBsmtSF", "1stFlrSF", "2ndFlrSF"]].fillna(0).sum(axis=1)
+    # Handle both possible column names
+    floor_cols = []
+    for col_variant in [["TotalBsmtSF", "1stFlrSF", "2ndFlrSF"],
+                       ["TotalBsmtSF", "FirstFlrSF", "SecondFlrSF"]]:
+        if all(c in df.columns for c in col_variant):
+            floor_cols = col_variant
+            break
+    
+    if floor_cols:
+        df["TotalSF"] = df[floor_cols].fillna(0).sum(axis=1)
+    else:
+        logger.warning(f"[WARN] Could not find floor columns. Available: {df.columns.tolist()}")
+        df["TotalSF"] = 0
+    
     df["TotalBath"] = (df["FullBath"].fillna(0) + 0.5*df["HalfBath"].fillna(0) +
                        df["BsmtFullBath"].fillna(0) + 0.5*df["BsmtHalfBath"].fillna(0))
 
@@ -244,9 +270,13 @@ def add_domain_features(df: pd.DataFrame) -> pd.DataFrame:
     df["IsRemodeled"] = (df["YearRemodAdd"] != df["YearBuilt"]).astype(int)
 
     # 3. Binary and ratio features
-    df["Has2ndFlr"] = (df["2ndFlrSF"] > 0).astype(int)
-    df["TotalPorchSF"] = df[["OpenPorchSF", "EnclosedPorch", "3SsnPorch", 
-                              "ScreenPorch", "WoodDeckSF"]].fillna(0).sum(axis=1)
+    second_flr_col = "2ndFlrSF" if "2ndFlrSF" in df.columns else "SecondFlrSF"
+    df["Has2ndFlr"] = (df[second_flr_col] > 0).astype(int)
+    
+    porch_cols = [c for c in ["OpenPorchSF", "EnclosedPorch", "3SsnPorch", 
+                              "ScreenPorch", "WoodDeckSF"] if c in df.columns]
+    if porch_cols:
+        df["TotalPorchSF"] = df[porch_cols].fillna(0).sum(axis=1)
 
     # 4. Quality-Area interaction
     if "OverallQual" in df.columns:
@@ -275,6 +305,7 @@ def build_feature_lists(
 ) -> tuple:
     """
     Categorize features into different types for preprocessing.
+    Handles both schema names and actual data column names.
     
     Parameters:
         df_train: Training DataFrame
@@ -283,6 +314,14 @@ def build_feature_lists(
     Returns:
         Tuple of (categorical, ordinal, numeric_continuous, numeric_absence)
     """
+    from src.core.config import SCHEMA_TO_DATA_MAPPING
+    
+    # First, normalize column names from schema to data names if needed
+    for schema_name, data_name in SCHEMA_TO_DATA_MAPPING.items():
+        for df in (df_train, df_test):
+            if schema_name in df.columns and data_name not in df.columns:
+                df.rename(columns={schema_name: data_name}, inplace=True)
+    
     # Ensure MSSubClass is treated as categorical
     for df in (df_train, df_test):
         if "MSSubClass" in df.columns:
@@ -310,6 +349,8 @@ def build_feature_lists(
     logger.info(f"[OK] Feature categorization: {len(cat_cols)} categorical, "
                 f"{len(ord_cols)} ordinal, {len(num_cont)} continuous, "
                 f"{len(num_abs_candidates)} with missing")
+    logger.debug(f"[DEBUG] Numeric columns: {num_cols}")
+    logger.debug(f"[DEBUG] Categorical columns: {cat_cols}")
     
     return cat_cols, ord_cols, num_cont, num_abs_candidates
 

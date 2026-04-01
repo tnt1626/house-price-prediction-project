@@ -15,11 +15,12 @@ DATA_DIR = PROJECT_ROOT / "data"
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 MODELS_DIR = ARTIFACTS_DIR / "models"
 SCALERS_DIR = ARTIFACTS_DIR / "scalers"
+EXPLAINER_DIR = ARTIFACTS_DIR / "explainers"
 LOGS_DIR = PROJECT_ROOT / "logs"
 CONFIGS_DIR = PROJECT_ROOT / "configs"
 
 # Create directories if they don't exist
-for directory in [DATA_DIR, ARTIFACTS_DIR, MODELS_DIR, SCALERS_DIR, LOGS_DIR, CONFIGS_DIR]:
+for directory in [DATA_DIR, ARTIFACTS_DIR, MODELS_DIR, SCALERS_DIR, EXPLAINER_DIR, LOGS_DIR, CONFIGS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
@@ -74,6 +75,15 @@ LASSO_ALPHA = 0.0005
 # ============================================================================
 # FEATURE ENGINEERING CONFIGURATION
 # ============================================================================
+
+
+SCHEMA_TO_DATA_MAPPING = {
+    "FirstFlrSF": "1stFlrSF",
+    "SecondFlrSF": "2ndFlrSF", 
+    "Bedroom": "BedroomAbvGr",
+    "Kitchen": "KitchenAbvGr",
+}
+
 # Ordinal feature mapping
 ORDINAL_MAP_CANONICAL = {
     "ExterQual": ["Po", "Fa", "TA", "Gd", "Ex"],

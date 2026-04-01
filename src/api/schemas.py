@@ -183,3 +183,69 @@ class ErrorResponse(BaseModel):
                 "detail": "LotArea must be positive"
             }
         }
+
+
+class FeatureExplanation(BaseModel):
+    """Individual feature explanation from SHAP analysis"""
+    
+    feature_name: str = Field(..., description="Human-readable feature name")
+    original_value: Optional[float] = Field(default=None, description="Original input value for this feature")
+    shap_value: float = Field(..., description="SHAP value indicating contribution to prediction")
+    contribution_type: str = Field(
+        ..., 
+        description="Whether this feature increases ('positive') or decreases ('negative') the predicted price"
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "feature_name": "OverallQual",
+                "original_value": 7.0,
+                "shap_value": 45000.5,
+                "contribution_type": "positive"
+            }
+        }
+
+
+class PredictionWithExplainResponse(BaseModel):
+    """Response schema for prediction with XAI explanations"""
+    
+    predicted_price: float = Field(..., description="Predicted sale price")
+    confidence: float = Field(..., description="Model confidence (0-1)")
+    model_name: str = Field(..., description="Name of the model used")
+    base_value: float = Field(..., description="SHAP base value (expected value / mean prediction)")
+    explanations: List[FeatureExplanation] = Field(
+        ..., 
+        description="Top contributing features with SHAP-based explanations (sorted by impact)"
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "predicted_price": 285000.50,
+                "confidence": 0.92,
+                "model_name": "CatBoost",
+                "base_value": 250000.0,
+                "explanations": [
+                    {
+                        "feature_name": "OverallQual",
+                        "original_value": 8.0,
+                        "shap_value": 25000.5,
+                        "contribution_type": "positive"
+                    },
+                    {
+                        "feature_name": "GrLivArea",
+                        "original_value": 2500.0,
+                        "shap_value": 15000.2,
+                        "contribution_type": "positive"
+                    },
+                    {
+                        "feature_name": "Neighborhood",
+                        "original_value": None,
+                        "shap_value": -5000.3,
+                        "contribution_type": "negative"
+                    }
+                ]
+            }
+        }
+
