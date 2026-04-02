@@ -1,0 +1,61 @@
+services:
+  # FastAPI Backend Service
+  api:
+    env_file: .env.docker
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: house-price-api
+    command: python start_api.py
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+      - ./logs:/app/logs
+      - ./data:/app/data:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - house-price-network
+    restart: unless-stopped
+
+  # Streamlit Frontend Service
+  frontend:
+    env_file: .env.docker
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: house-price-frontend
+    command: streamlit run src/frontend/app.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - API_URL=http://api:8000
+      - STREAMLIT_SERVER_HEADLESS=true
+    volumes:
+      - ./src/frontend:/app/src/frontend
+      - ./artifacts:/app/artifacts:ro
+      - ./data:/app/data:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - house-price-network
+    restart: unless-stopped
+
+networks:
+  house-price-network:
+    driver: bridge
+
+volumes:
+  api_logs:
+  frontend_cache:

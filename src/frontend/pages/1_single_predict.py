@@ -9,21 +9,21 @@ import sys
 import os
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 import streamlit as st
 import logging
 from typing import Dict, Any
 
-from api_client import get_api_client, APIError
-from config import FEATURE_GROUPS, DEFAULT_FEATURES
-from ui_components import (
+from src.frontend.api_client import get_api_client, APIError
+from src.frontend.config import FEATURE_GROUPS, DEFAULT_FEATURES
+from src.frontend.ui_components import (
     create_input_form,
     display_prediction_result,
     display_shap_explanations
 )
-from utils import format_currency, validate_house_data, initialize_session_state
+from src.frontend.utils import format_currency, validate_house_data, initialize_session_state
 
 logger = logging.getLogger(__name__)
 
