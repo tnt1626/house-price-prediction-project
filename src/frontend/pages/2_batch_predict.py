@@ -9,18 +9,18 @@ import sys
 import os
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 import streamlit as st
 import pandas as pd
 import logging
 from typing import Dict, Any, List
 
-from api_client import get_api_client, APIError
-from config import DEFAULT_FEATURES, MAX_BATCH_SIZE, ALLOWED_FILE_TYPES
-from ui_components import display_batch_results, download_button_csv
-from utils import parse_csv_for_batch, initialize_session_state
+from src.frontend.api_client import get_api_client, APIError
+from src.frontend.config import DEFAULT_FEATURES, MAX_BATCH_SIZE, ALLOWED_FILE_TYPES
+from src.frontend.ui_components import display_batch_results, download_button_csv
+from src.frontend.utils import parse_csv_for_batch, initialize_session_state
 
 logger = logging.getLogger(__name__)
 
