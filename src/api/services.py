@@ -13,31 +13,27 @@ import logging
 from src.core.config import MODELS_DIR, SCALERS_DIR, EXPLAINER_DIR, SCHEMA_TO_DATA_MAPPING
 from src.api.schemas import HousePriceInput, PredictionResponse
 from src.ml_pipeline.explainability import ModelExplainer
+from sklearn.pipeline import Pipeline as SklearnPipeline
 
  
 logger = logging.getLogger(__name__)
 
 
-class PredictionService:
-    """Service for making price predictions."""
+class ModelService:
+    """Service for managing model loading and predictions."""
     
-    def __init__(self, model_path: Optional[Path] = None, scaler_path: Optional[Path] = None):
+    def __init__(self, model_path: Optional[Path] = None):
         """
-        Initialize prediction service.
+        Initialize model service.
         
         Parameters:
             model_path: Path to trained model
-            scaler_path: Path to preprocessing scaler
         """
         self.model = None
-        self.preprocessor = None
-        self.explainer = None
         self.model_name = "None"
         
         if model_path:
             self.load_model(model_path)
-        if scaler_path:
-            self.load_preprocessor(scaler_path)
     
     def load_model(self, model_path: Path) -> bool:
         """
@@ -64,6 +60,61 @@ class PredictionService:
             logger.error(f"Failed to load model: {e}")
             return False
     
+    def is_ready(self) -> bool:
+        """Check if model is loaded."""
+        return self.model is not None
+    
+    def predict(self, X: pd.DataFrame) -> float:
+        """
+        Make a single prediction.
+        
+        Parameters:
+            X: Feature data as DataFrame
+            
+        Returns:
+            Predicted price
+        """
+        if not self.is_ready():
+            raise RuntimeError("Model not loaded")
+        
+        try:
+            prediction = self.model.predict(X)
+            return float(prediction[0])
+        except Exception as e:
+            logger.error(f"Prediction error: {e}")
+            raise
+    
+    def predict_batch(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Make predictions for multiple samples.
+        
+        Parameters:
+            X: Feature data as DataFrame
+            
+        Returns:
+            Array of predictions
+        """
+        if not self.is_ready():
+            raise RuntimeError("Model not loaded")
+        
+        return self.model.predict(X)
+
+
+class PreprocessingService:
+    """Service for data preprocessing and transformation."""
+    
+    def __init__(self, scaler_path: Optional[Path] = None):
+        """
+        Initialize preprocessing service.
+        
+        Parameters:
+            scaler_path: Path to preprocessing scaler
+        """
+        self.preprocessor = None
+        
+        if scaler_path:
+            self.load_preprocessor(scaler_path)
+    
     def load_preprocessor(self, scaler_path: Path) -> bool:
         """
         Load preprocessing pipeline from disk.
@@ -87,10 +138,6 @@ class PredictionService:
         except Exception as e:
             logger.error(f"Failed to load preprocessor: {e}")
             return False
-    
-    def is_ready(self) -> bool:
-        """Check if service is ready for predictions."""
-        return self.model is not None
     
     def input_to_dataframe(self, data: HousePriceInput) -> pd.DataFrame:
         """
@@ -185,89 +232,199 @@ class PredictionService:
         
         return df
     
-    def predict_single(self, input_data: HousePriceInput) -> Dict[str, Any]:
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Thực hiện dự báo cho một căn nhà duy nhất.
+        Transform DataFrame using preprocessor.
+        
+        Parameters:
+            df: Input DataFrame
+            
+        Returns:
+            Transformed DataFrame
         """
-        if not self.is_ready():
-            raise RuntimeError("Model chưa được tải. Vui lòng kiểm tra lại đường dẫn model.")
+        if self.preprocessor is None:
+            return df
         
         try:
-            # 1. Chuyển đổi dữ liệu từ Schema (Pydantic) sang DataFrame của Pandas
-            # Hàm này sẽ mapping lại tên cột từ Schema sang tên cột thật trong data (LotArea, LotFrontage, ...)
-            df = self.input_to_dataframe(input_data)
+            X_transformed = self.preprocessor.transform(df)
             
-            # 2. Đảm bảo tất cả các cột mà preprocessor yêu cầu đều có mặt (tránh lỗi KeyError)
-            df = self._ensure_preprocessor_columns(df)
-            
-            # 3. Xử lý logic Tiền xử lý và Dự báo
-            # Kiểm tra xem self.model có phải là một Pipeline của sklearn không
-            from sklearn.pipeline import Pipeline as SklearnPipeline
-            
-            if isinstance(self.model, SklearnPipeline):
-                # Nếu model là một Pipeline (đã bao gồm bước transform), ta truyền trực tiếp df gốc vào
-                # Điều này tránh lỗi "Double Transformation" dẫn đến mất cột 'LotFrontage'
-                logger.info("Model is a full Pipeline. Predicting directly from raw features.")
-                X_input_for_model = df
-                
-                # QUAN TRỌNG: Đừng transform df lần nữa vì model.predict() sẽ tự làm
-                # Thay vào đó, ta trích xuất X_transformed từ các bước transform của pipeline
-                # Để SHAP có dữ liệu đã xử lý (engineered features)
-                try:
-                    # Lấy bước preprocessor từ pipeline
-                    preprocessor_steps = self.model.named_steps
-                    if 'preprocessor' in preprocessor_steps:
-                        # Transform bằng preprocessor từ pipeline
-                        X_transformed = preprocessor_steps['preprocessor'].transform(df)
-                    else:
-                        # Nếu không tìm thấy, transform bằng self.preprocessor
-                        if self.preprocessor:
-                            X_transformed = self.preprocessor.transform(df)
-                        else:
-                            X_transformed = df
-                except Exception:
-                    # Fallback: dùng self.preprocessor
-                    if self.preprocessor:
-                        X_transformed = self.preprocessor.transform(df)
-                    else:
-                        X_transformed = df
-            else:
-                # Nếu model chỉ là thuật toán thuần túy (XGB, CatBoost), ta phải transform thủ công
-                if self.preprocessor is None:
-                    logger.warning("No preprocessor loaded, using raw features")
-                    X_transformed = df
-                else:
-                    X_transformed = self.preprocessor.transform(df)
-                X_input_for_model = X_transformed
-
-            # 4. Chuyển đổi dữ liệu đã xử lý sang DataFrame nếu nó đang là NumPy array
-            # Bước này cực kỳ quan trọng để module XAI/SHAP không bị lỗi '.columns'
+            # Ensure transformed data is DataFrame with column names
             if not isinstance(X_transformed, pd.DataFrame):
                 try:
-                    # Lấy tên các cột sau khi biến đổi từ preprocessor
                     cols = self.preprocessor.get_feature_names_out()
                 except Exception:
-                    # Nếu không lấy được tên thật, dùng tên tạm f0, f1... để không bị dừng chương trình
                     cols = [f"f{i}" for i in range(X_transformed.shape[1])]
                 
                 X_transformed = pd.DataFrame(X_transformed, columns=cols)
             
-            # 5. Thực hiện dự báo giá
-            # Nếu model là pipeline, nó nhận X_input_for_model (df gốc)
-            # Nếu model là estimator, nó nhận X_input_for_model (X_transformed)
-            prediction = self.model.predict(X_input_for_model)
-            predicted_price = float(prediction[0])
-            
-            # 6. Tạo giải thích SHAP nếu có Explainer
-            if self.explainer:
-                try:
-                    # Truyền X_transformed đã là DataFrame vào đây
-                    self.explainer.get_local_explanation(X_transformed, input_data)
-                except Exception as e:
-                    logger.warning(f"Không thể tạo giải thích XAI: {e}")
+            return X_transformed
+        except Exception as e:
+            logger.error(f"Transformation error: {e}")
+            raise
 
+
+class ExplanationService:
+    """Service for SHAP-based model explanations."""
+    
+    def __init__(self):
+        """Initialize explanation service."""
+        self.explainer = None
+    
+    def load_explainer(
+        self,
+        model: Any,
+        preprocessor: Any,
+        explainer_path: Optional[Path] = None
+    ) -> bool:
+        """
+        Load SHAP explainer from disk.
+        
+        Parameters:
+            model: Trained model
+            preprocessor: Preprocessing pipeline
+            explainer_path: Path to explainer file (default: EXPLAINER_DIR/shap_explainer.joblib)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if model is None or preprocessor is None:
+            logger.error("Model and preprocessor must be provided to load explainer")
+            return False
+        
+        if explainer_path is None:
+            explainer_path = EXPLAINER_DIR / "shap_explainer.joblib"
+        
+        try:
+            explainer_path = Path(explainer_path)
+            if not explainer_path.exists():
+                logger.warning(f"Explainer file not found: {explainer_path}")
+                return False
+            
+            # Get original feature names from schema
+            original_feature_names = list(HousePriceInput.model_fields.keys())
+            
+            self.explainer = ModelExplainer.load(
+                model,
+                preprocessor,
+                explainer_path,
+                original_feature_names=original_feature_names
+            )
+            logger.info(f"[OK] Explainer loaded: {explainer_path.name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load explainer: {e}")
+            return False
+    
+    def is_ready(self) -> bool:
+        """Check if explainer is loaded."""
+        return self.explainer is not None
+    
+    def explain(
+        self,
+        X_processed: pd.DataFrame,
+        original_input: Dict[str, Any],
+        top_k: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Generate local explanation for a sample.
+        
+        Parameters:
+            X_processed: Processed feature data as DataFrame
+            original_input: Original input data
+            top_k: Number of top features to return
+            
+        Returns:
+            Explanation data with base value and feature contributions
+        """
+        if not self.is_ready():
+            raise RuntimeError("Explainer not loaded")
+        
+        try:
+            explanation = self.explainer.get_local_explanation(
+                X_single=X_processed,
+                original_input=original_input,
+                top_k=top_k
+            )
+            return explanation
+        except Exception as e:
+            logger.error(f"Explanation generation failed: {e}")
+            raise
+
+
+class PredictionService:
+    """Orchestrator service for making price predictions with preprocessing and explanations."""
+    
+    def __init__(self, model_path: Optional[Path] = None, scaler_path: Optional[Path] = None):
+        """
+        Initialize prediction service.
+        
+        Parameters:
+            model_path: Path to trained model
+            scaler_path: Path to preprocessing scaler
+        """
+        self.model_service = ModelService(model_path=model_path)
+        self.preprocessing_service = PreprocessingService(scaler_path=scaler_path)
+        self.explanation_service = ExplanationService()
+    
+    @property
+    def model_name(self) -> str:
+        """Get loaded model name."""
+        return self.model_service.model_name
+    
+    def load_model(self, model_path: Path) -> bool:
+        """Load trained model from disk."""
+        return self.model_service.load_model(model_path)
+    
+    def load_preprocessor(self, scaler_path: Path) -> bool:
+        """Load preprocessing pipeline from disk."""
+        return self.preprocessing_service.load_preprocessor(scaler_path)
+    
+    def is_ready(self) -> bool:
+        """Check if service is ready for predictions."""
+        return self.model_service.is_ready()
+    def input_to_dataframe(self, data: HousePriceInput) -> pd.DataFrame:
+        """Convert input schema to DataFrame."""
+        return self.preprocessing_service.input_to_dataframe(data)
+    
+    def predict_single(self, input_data: HousePriceInput) -> Dict[str, Any]:
+        """
+        Make a single prediction.
+        
+        Parameters:
+            input_data: Input house data
+            
+        Returns:
+            Dictionary with prediction and confidence
+        """
+        if not self.is_ready():
+            raise RuntimeError("Model not loaded. Please check model path.")
+        
+        try:
+            # Step 1: Convert schema to DataFrame
+            df = self.preprocessing_service.input_to_dataframe(input_data)
+            
+            # Step 2: Ensure all required columns exist
+            df = self.preprocessing_service._ensure_preprocessor_columns(df)
+            
+            # Step 3: Determine if we need to transform data
+            if isinstance(self.model_service.model, SklearnPipeline):
+                # Pipeline handles preprocessing internally
+                logger.info("Model is a full Pipeline. Predicting directly from raw features.")
+                X_input = df
+            else:
+                # Transform data manually
+                if self.preprocessing_service.preprocessor:
+                    X_input = self.preprocessing_service.transform(df)
+                else:
+                    logger.warning("No preprocessor loaded, using raw features")
+                    X_input = df
+            
+            # Step 4: Make prediction
+            prediction = self.model_service.predict(X_input)
+            
             return {
-                "predicted_price": predicted_price,
+                "predicted_price": prediction,
                 "confidence": 0.85,
                 "model_name": self.model_name
             }
@@ -286,12 +443,12 @@ class PredictionService:
             List of predictions
         """
         predictions = []
-        for data in data_list:
+        for idx, data in enumerate(data_list):
             try:
                 pred = self.predict_single(data)
                 predictions.append(pred)
             except Exception as e:
-                logger.error(f"Failed to predict for house {len(predictions)}: {e}")
+                logger.error(f"Failed to predict for house {idx}: {e}")
                 predictions.append({
                     "predicted_price": None,
                     "confidence": 0.0,
@@ -302,43 +459,16 @@ class PredictionService:
         return predictions
     
     def load_explainer(self, explainer_path: Optional[Path] = None) -> bool:
-        """
-        Load SHAP explainer from disk.
-        
-        Parameters:
-            explainer_path: Path to explainer file (default: EXPLAINER_DIR/shap_explainer.joblib)
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        if self.model is None or self.preprocessor is None:
-            logger.error("Model and preprocessor must be loaded before explainer")
-            return False
-        
-        if explainer_path is None:
-            explainer_path = EXPLAINER_DIR / "shap_explainer.joblib"
-        
-        try:
-            explainer_path = Path(explainer_path)
-            if not explainer_path.exists():
-                logger.warning(f"Explainer file not found: {explainer_path}")
-                return False
-            
-            # Get original feature names from schema
-            original_feature_names = list(HousePriceInput.model_fields.keys())
-            
-            self.explainer = ModelExplainer.load(
-                self.model, 
-                self.preprocessor, 
-                explainer_path,
-                original_feature_names=original_feature_names
-            )
-            logger.info(f"[OK] Explainer loaded: {explainer_path.name}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to load explainer: {e}")
-            return False
+        """Load SHAP explainer from disk."""
+        return self.explanation_service.load_explainer(
+            self.model_service.model,
+            self.preprocessing_service.preprocessor,
+            explainer_path
+        )
+    
+    def is_explainer_ready(self) -> bool:
+        """Check if SHAP explainer is ready for explanations."""
+        return self.explanation_service.is_ready()
     
     def predict_and_explain(
         self,
@@ -346,81 +476,75 @@ class PredictionService:
         top_k: int = 10
     ) -> Dict[str, Any]:
         """
-        Thực hiện dự báo và cung cấp giải thích dựa trên SHAP, xử lý lỗi mảng NumPy.
+        Make a prediction and provide SHAP-based explanation.
+        
+        Parameters:
+            data: Input house data
+            top_k: Number of top features to explain
+            
+        Returns:
+            Dictionary with prediction and explanation
         """
         if not self.is_ready():
-            raise RuntimeError("Model chưa được tải. Vui lòng kiểm tra lại đường dẫn.")
+            raise RuntimeError("Model not loaded. Please check model path.")
         
-        if self.explainer is None:
-            raise RuntimeError("Explainer chưa được tải. Vui lòng kiểm tra lại cấu hình XAI.")
+        if not self.explanation_service.is_ready():
+            raise RuntimeError("Explainer not loaded. Please check explainer path.")
         
         try:
-            # 1. Chuyển đổi Schema thành DataFrame (Pydantic V2 dùng model_dump)
-            df = self.input_to_dataframe(data)
-            original_input = data.model_dump() 
+            # Step 1: Convert schema to DataFrame
+            df = self.preprocessing_service.input_to_dataframe(data)
+            original_input = data.model_dump()
             
-            # 2. Xử lý logic Tiền xử lý dựa trên loại Model (Tránh lỗi Double Transformation)
-            from sklearn.pipeline import Pipeline as SklearnPipeline
-            
-            # Nếu model là một Pipeline hoàn chỉnh (đã có bước preprocessing bên trong)
-            if isinstance(self.model, SklearnPipeline):
+            # Step 2: Determine if we need to transform data
+            if isinstance(self.model_service.model, SklearnPipeline):
                 logger.info("Model is a full Pipeline. Using raw features for prediction.")
-                X_input_for_model = df # Dùng DataFrame gốc cho model
+                X_input = df
                 
-                # QUAN TRỌNG: Đừng transform df lần nữa vì model.predict() sẽ tự làm
-                # Thay vào đó, ta trích xuất X_processed từ các bước transform của pipeline
-                # Để SHAP có dữ liệu đã xử lý (engineered features)
+                # Extract processed features for SHAP
                 try:
-                    # Lấy bước preprocessor từ pipeline
-                    preprocessor_steps = self.model.named_steps
+                    preprocessor_steps = self.model_service.model.named_steps
                     if 'preprocessor' in preprocessor_steps:
-                        # Transform bằng preprocessor từ pipeline
                         df_processed = preprocessor_steps['preprocessor'].transform(df)
                     else:
-                        # Nếu không tìm thấy, transform bằng self.preprocessor
-                        if self.preprocessor:
-                            df_processed = self.preprocessor.transform(df)
+                        if self.preprocessing_service.preprocessor:
+                            df_processed = self.preprocessing_service.transform(df)
                         else:
                             df_processed = df
                 except Exception:
-                    # Fallback: dùng self.preprocessor
-                    if self.preprocessor:
-                        df_processed = self.preprocessor.transform(df)
+                    if self.preprocessing_service.preprocessor:
+                        df_processed = self.preprocessing_service.transform(df)
                     else:
                         df_processed = df
             else:
-                # Nếu model chỉ là thuật toán (XGB, CatBoost...), ta phải tự transform trước
-                if self.preprocessor:
-                    df_processed = self.preprocessor.transform(df)
+                # Transform data manually
+                if self.preprocessing_service.preprocessor:
+                    df_processed = self.preprocessing_service.transform(df)
                 else:
                     df_processed = df
-                X_input_for_model = df_processed
-
-            # 3. QUAN TRỌNG: Đảm bảo df_processed LUÔN là DataFrame có tên cột
-            # Điều này để SHAP không bị lỗi 'numpy.ndarray object has no attribute columns'
+                X_input = df_processed
+            
+            # Ensure processed data is a DataFrame
             if not isinstance(df_processed, pd.DataFrame):
                 try:
-                    # Lấy tên cột thật từ preprocessor (nếu có)
-                    cols = self.preprocessor.get_feature_names_out()
+                    cols = self.preprocessing_service.preprocessor.get_feature_names_out()
                 except Exception:
-                    # Nếu không lấy được, dùng tên cột tạm f0, f1...
                     cols = [f"f{i}" for i in range(df_processed.shape[1])]
                 
                 df_processed = pd.DataFrame(df_processed, columns=cols)
             
-            # 4. Thực hiện dự báo (Sử dụng đúng biến X_input_for_model)
-            prediction = self.model.predict(X_input_for_model)[0]
+            # Step 3: Make prediction
+            prediction = self.model_service.predict(X_input)
             
-            # 5. Lấy dữ liệu giải thích từ Explainer
-            # Lúc này df_processed chắc chắn là DataFrame, không còn lỗi .columns nữa
-            explanation_data = self.explainer.get_local_explanation(
-                X_single=df_processed,
-                original_input=original_input,
+            # Step 4: Get explanation
+            explanation_data = self.explanation_service.explain(
+                df_processed,
+                original_input,
                 top_k=top_k
             )
             
             return {
-                "predicted_price": float(prediction),
+                "predicted_price": prediction,
                 "confidence": 0.85,
                 "model_name": self.model_name,
                 "base_value": explanation_data["base_value"],

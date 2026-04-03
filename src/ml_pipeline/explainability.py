@@ -394,11 +394,17 @@ class ModelExplainer:
             raise RuntimeError("Explainer not fitted. Cannot save.")
         
         if path is None:
-            EXPLAINER_DIR.mkdir(parents=True, exist_ok=True)
+            try:
+                EXPLAINER_DIR.mkdir(parents=True, exist_ok=True)
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Could not create explainer directory {EXPLAINER_DIR}: {e}")
             path = EXPLAINER_DIR / "shap_explainer.joblib"
         else:
             path = Path(path)
-            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Could not create directory {path.parent}: {e}")
         
         try:
             logger.info(f"[DEBUG] Saving explainer to: {path}")
