@@ -37,11 +37,15 @@ class Logger:
             
             # File handler if specified
             if log_file:
-                log_file.parent.mkdir(parents=True, exist_ok=True)
-                file_handler = logging.FileHandler(log_file, encoding='utf-8')
-                file_handler.setLevel(logging.DEBUG)
-                file_handler.setFormatter(formatter)
-                self.logger.addHandler(file_handler)
+                try:
+                    log_file.parent.mkdir(parents=True, exist_ok=True)
+                    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+                    file_handler.setLevel(logging.DEBUG)
+                    file_handler.setFormatter(formatter)
+                    self.logger.addHandler(file_handler)
+                except (OSError, PermissionError) as e:
+                    console_handler.setLevel(logging.WARNING)
+                    self.logger.warning(f"Could not create log file {log_file}: {e}. Logging to console only.")
 
     def info(self, message: str) -> None:
         """Log info message"""

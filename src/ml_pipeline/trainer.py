@@ -279,9 +279,16 @@ def run_baseline_evaluation(
 
         # Save results
         results_path = LOGS_DIR / "baseline_results.csv"
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        res_df.to_csv(results_path, index=False)
-        mlflow.log_artifact(str(results_path))
+        try:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Could not create logs directory {LOGS_DIR}: {e}")
+        
+        try:
+            res_df.to_csv(results_path, index=False)
+            mlflow.log_artifact(str(results_path))
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Could not save results to {results_path}: {e}")
 
         logger.info(f"[RANKING] Best model: {best['model']} | RMSE: {best['cv_rmse']:.4f}")
         return res_df, preds, top5

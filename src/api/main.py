@@ -189,7 +189,7 @@ async def predict_with_explanation(data: HousePriceInput, top_features: int = 10
             detail="Prediction service is not ready. Model not loaded."
         )
     
-    if prediction_service.explainer is None:
+    if not prediction_service.is_explainer_ready():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SHAP explainer not loaded. XAI features are unavailable. Please retrain the model with explainer generation."

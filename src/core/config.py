@@ -19,9 +19,14 @@ EXPLAINER_DIR = ARTIFACTS_DIR / "explainers"
 LOGS_DIR = PROJECT_ROOT / "logs"
 CONFIGS_DIR = PROJECT_ROOT / "configs"
 
-# Create directories if they don't exist
+# Create directories if they don't exist (handle read-only filesystems)
 for directory in [DATA_DIR, ARTIFACTS_DIR, MODELS_DIR, SCALERS_DIR, EXPLAINER_DIR, LOGS_DIR, CONFIGS_DIR]:
-    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except (OSError, PermissionError) as e:
+        # Log warning but don't crash - filesystem may be read-only
+        # This is common in Docker containers or CI/CD environments
+        logging.warning(f"Could not create directory {directory}: {e}. This may be expected in read-only environments.")
 
 # ============================================================================
 # DATA CONFIGURATION
@@ -35,7 +40,11 @@ RANDOM_STATE = 42
 # MLFLOW CONFIGURATION
 # ============================================================================
 MLFLOW_DIR = PROJECT_ROOT / "mlruns"
-MLFLOW_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    MLFLOW_DIR.mkdir(parents=True, exist_ok=True)
+except (OSError, PermissionError):
+    logging.warning(f"Could not create MLFLOW directory {MLFLOW_DIR}. This may be expected in read-only environments.")
+
 MLFLOW_TRACKING_URI = f"file:{MLFLOW_DIR}"
 MLFLOW_EXPERIMENT_NAME = "House_Price_Prediction"
 
@@ -43,7 +52,10 @@ MLFLOW_EXPERIMENT_NAME = "House_Price_Prediction"
 # CACHE CONFIGURATION
 # ============================================================================
 CACHE_DIR = PROJECT_ROOT / "training_cache"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+except (OSError, PermissionError):
+    logging.warning(f"Could not create cache directory {CACHE_DIR}. This may be expected in read-only environments.")
 
 # ============================================================================
 # MODEL TRAINING CONFIGURATION
